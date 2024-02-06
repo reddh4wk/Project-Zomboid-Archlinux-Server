@@ -1,0 +1,12 @@
+[Unit]
+Description=Project Zomboid Service
+After=network.target
+
+[Service]
+ExecStart=pzserver --start
+ExecStop=pzserver --stop
+RemainAfterExit=yes
+Type=simple
+
+[Install]
+WantedBy=default.target
