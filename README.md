@@ -8,12 +8,12 @@ First of all take a look at this guide: https://pzwiki.net/wiki/Dedicated_server
 
 Anyway on archlinux based distribution you will need to:
 
-Create /opt/pzserver
-Create the user that will use the application
-Make that user the owner of /opt/pzserver
-Enable multilib repository
-Install steamcmd from AUR
-Then just launch steamcmd and from that prompt launch:
+- Create /opt/pzserver
+- Create the user that will use the application
+- Make that user the owner of /opt/pzserver
+- Enable multilib repository
+- Install steamcmd from AUR
+- Then just launch steamcmd and from that prompt launch:
 
 ```
 > force_install_dir /opt/pzserver
@@ -21,20 +21,21 @@ Then just launch steamcmd and from that prompt launch:
 > app_update 380870 validate
 > quit
 ```
-Create /etc/systemd/system/default.target.wants/pzserver.service (you can use the one in this repository)
-Enable the service file jsut created:
+- Create /etc/systemd/system/default.target.wants/pzserver.service (you can use the one in this repository)
+- Enable the service file jsut created:
 
 ```
 > systemtcl enable pzserver
 ```
 
-Create /opt/pzserver/pzserver.sh (in this repository) and make it executable
-Create a symbolic link to /usr/bin so that it's easier to launch for anyone
+- Create /opt/pzserver/pzserver.sh (in this repository) and make it executable
+- Create a symbolic link to /usr/bin so that it's easier to launch for anyone
 
 ```
 > ln -s /opt/pzserver/pzserver.sh /usr/bin/pzserver
 ```
 The first time launch the server manually using its own sh. It requires a password to set up. This will happen for each user you launch it fro, it is not system-wide.
+
 I may have missed some steps since I'm writing based on my memory. Sorry. But all the big steps are here.
 
 ### Sandbox preset to server settings conversion
