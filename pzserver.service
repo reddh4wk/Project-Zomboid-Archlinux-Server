@@ -3,6 +3,7 @@ Description=Project Zomboid Service
 After=network.target
 
 [Service]
+User=pzserver
 ExecStart=pzserver --start
 ExecStop=pzserver --stop
 RemainAfterExit=yes
