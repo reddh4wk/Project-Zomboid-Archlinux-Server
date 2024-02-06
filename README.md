@@ -38,7 +38,7 @@ The first time launch the server manually using its own sh. It requires a passwo
 
 I may have missed some steps since I'm writing based on my memory. Sorry. But all the big steps are here.
 
-### Sandbox preset to server settings conversion
+# Sandbox preset to server settings conversion
 
 Oh, I also leave you a Powershell script I made to copy the settings from the Sandbox presets you can create in-game to the (nicer) .lua format the server uses. I am assuming you are playing from windows.
 This way it will be easy for you to create whatever setting through the GUI in-game and then export the file on the server.
