@@ -17,7 +17,7 @@ $template = "$HOME\Zomboid\Server\servertest_SandboxVars.lua"
 $output = "$HOME\Desktop\servertest_SandboxVars.lua"
 
 try {
-    Copy-Item -Path $template -Destination $output
+    $content = Get-Content $template
     Get-Content $source_variables_file | ForEach-Object {
         $row = $_ -split '='
         if(-not [string]::IsNullOrWhiteSpace($row[1])){
@@ -28,11 +28,12 @@ try {
                 $name=$variable_name
             }
             $value = $row[1]
-            Get-Content $output | ForEach-Object { 
+            Get-Content $template | ForEach-Object { 
                 if ($_ -match "\b$name" -and $_ -notmatch "--"){
-                    $_ -replace '(?<==\s).*?(?=,)', $value;
+                    $content = $content -replace $_,($_ -replace ' (?<==\s).*?(?=,)', $value)
                 }
             }
+            $content | Out-File -FilePath $output
         }
     }
     Write-Host "Your file has been saved here: $output"
