@@ -86,11 +86,13 @@ def alert_bot(keyword, line):
             username = re.search(pattern_username, line).group(1)
             pattern_steamid = r"id=(\d+)"
             steamid = re.search(pattern_steamid, line).group(1)
+            left = False
+            found = False
             for each in global_association_table:
                 if each[0] == steamid:
                     if each[2] == 1:
                         left = True
-                found = True
+                    found = True
             if left or not found:
                 send_to_all("A player connected to the server: "+username)
             global_association_table.append([steamid, username, 0])
