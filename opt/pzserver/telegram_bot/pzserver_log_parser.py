@@ -92,16 +92,19 @@ def alert_bot(keyword, line):
                 if each[0] == steamid:
                     if each[2] == 1:
                         left = True
+                        each[2] = 0
                     found = True
             if left or not found:
                 send_to_all("A player connected to the server: "+username)
-            global_association_table.append([steamid, username, 0])
+            if not found:
+                global_association_table.append([steamid, username, 0])
         elif left_flag and keyword == "CloseConnection: Finally disconnected":
             pattern_steamid = r"SteamID=(\d+)"
             steamid = re.search(pattern_steamid, line).group(1)
             username = False
             for each in global_association_table:
                 if each[0] == steamid:
+                    each[2] = 1
                     username = each[1]
             if not username:
                 username = steamid
