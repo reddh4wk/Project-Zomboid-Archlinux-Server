@@ -107,10 +107,10 @@ def logger(message, msg_type, log_file=log_file()):
 ########################################
 
 def get_chats():
-    return [-1002033569385] # if message.chat.id in chat_ids
+    return [HERE PUT YOUR CHAT ID] # if message.chat.id in chat_ids
 
 def get_token():
-    return '6353909839:AAEQRzoSX9pXCL0sCtRUiw0aWW4via9bgzU'
+    return 'HERE PUT YOUR TOKEN'
 
 def get_servicename():
     return 'pzserver'
