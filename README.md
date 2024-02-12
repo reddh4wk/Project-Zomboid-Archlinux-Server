@@ -45,3 +45,7 @@ I may have missed some steps since I'm writing based on my memory. Sorry. But al
 
 Oh, I also leave you a Powershell script I made to copy the settings from the Sandbox presets you can create in-game to the (nicer) .lua format the server uses. I am assuming you are playing from windows.
 This way it will be easy for you to create whatever setting through the GUI in-game and then export the file on the server.
+
+# Telegram Bot
+
+I also made a telegram bot to control things like, when the server is up, when a player logs in, and to allow the possibility to restart the application from telegram. You will need to install a python virtual environment in /opt/pzserver/python and make sure to install all the dependencies through /opt/pzserver/python/bin/pip if something's missing. And create a API token with BotFather and put it in the configuration in /opt/pzserver/telegram_bot/pzserver_main.py
