@@ -90,7 +90,7 @@ if __name__ == '__main__':
 ########################################
 
 ALL_CHATS=[-1002033569385]
-TOKEN='6353909839:AAEQRzoSX9pXCL0sCtRUiw0aWW4via9bgzU'
+TOKEN=''
 SERVICE_NAME ='pzserver'
 
 if __name__ == '__main__':
