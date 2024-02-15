@@ -43,6 +43,33 @@
 # I think this should be it...
 
 ########################################
+### INFORMATION FOR THE LOG FILE
+########################################
+
+def log_file():
+    import os
+    return os.path.join(os.path.abspath(os.path.dirname(__file__)), os.path.splitext(os.path.basename(__file__))[0]+'.log')
+
+def clean_logs(max_rows=1000, buffer=300, log_file=log_file()):
+    with open(log_file, 'r') as f:
+        lines = f.readlines()
+        if len(lines) >= max_rows:
+            lines = lines[-(max_rows - buffer):]
+        with open(log_file, 'w') as f:
+            f.writelines(lines)
+
+def logger(message, msg_type, log_file=log_file()):
+    import os
+    import traceback
+    
+    with open(log_file, 'a') as f:
+        timestamp = log_timestamp()
+        f.write(timestamp+" ["+msg_type+"] "+str(message)+'\n')
+        traceback_str = traceback.format_exc()
+        if traceback_str:
+            f.write(timestamp+"[TRACEBACK] "+traceback_str)
+
+########################################
 ### AVOID DOUBLE EXECUTION OF THIS SCRIPT ON THE CURRENT SYSTEM
 ########################################
 
@@ -90,7 +117,7 @@ if __name__ == '__main__':
 ########################################
 
 ALL_CHATS=[-1002033569385]
-TOKEN=''
+TOKEN='6353909839:AAEQRzoSX9pXCL0sCtRUiw0aWW4via9bgzU'
 SERVICE_NAME ='pzserver'
 
 if __name__ == '__main__':
@@ -122,33 +149,6 @@ def log_timestamp():
 def timestamp():
     from datetime import datetime
     return datetime.now()
-
-########################################
-### INFORMATION FOR THE LOG FILE
-########################################
-
-def log_file():
-    import os
-    return os.path.join(os.path.abspath(os.path.dirname(__file__)), os.path.splitext(os.path.basename(__file__))[0]+'.log')
-
-def clean_logs(max_rows=1000, buffer=300, log_file=log_file()):
-    with open(log_file, 'r') as f:
-        lines = f.readlines()
-        if len(lines) >= max_rows:
-            lines = lines[-(max_rows - buffer):]
-        with open(log_file, 'w') as f:
-            f.writelines(lines)
-
-def logger(message, msg_type, log_file=log_file()):
-    import os
-    import traceback
-    
-    with open(log_file, 'a') as f:
-        timestamp = log_timestamp()
-        f.write(timestamp+" ["+msg_type+"] "+str(message)+'\n')
-        traceback_str = traceback.format_exc()
-        if traceback_str:
-            f.write(timestamp+"[TRACEBACK] "+traceback_str)
 
 ########################################
 ### STATUS CHECKER
@@ -293,7 +293,11 @@ def get_setting(setting):
 
 def get_setting_desc(setting):
     if hasattr(global_settings, setting):
-        return getattr(global_settings, setting).description
+        description = getattr(global_settings, setting).description
+        if description:
+            return description
+        else:
+            return "No description present in file."
     else:
         return Exception
 
@@ -315,7 +319,7 @@ def is_modid(mod_id):
     return (char.isalnum() or char == '_' for char in mod_id)
 
 def is_workshopid(workshop_id):
-    return (char.isdigit() for char in workshop_id and len(workshop_id) == 10)
+    return all(char.isdigit() for char in workshop_id) and len(workshop_id) == 10
 
 def are_valid_IDs(id1, id2):
     if is_workshopid(id1):
@@ -357,7 +361,7 @@ def mod_is_installed(id1, id2):
 def check_modid_list(modid_list):
     if not modid_list:
         return True  # Empty string is allowed
-    modid_list = modid_list.split(',')
+    modid_list = modid_list.split(';')
     return all(all(is_modid(modid)) for modid in modid_list)
 
 def check_workshopid_list(workshopid_list):
@@ -367,7 +371,7 @@ def check_workshopid_list(workshopid_list):
     return all(all(is_workshopid(modid)) for modid in modid_list)
 
 def list_mod(message):
-    workshopids=get_setting('WorkshopItems').split(',')
+    workshopids=get_setting('WorkshopItems').split(';')
     if len(workshopids) == 0:
         bot.reply_to(message, "The mod list is empty", disable_notification=True)
     else:
@@ -490,8 +494,8 @@ def monitor_log(filename=pzserver_log_path, keywords=[pzserver_log_keywork_start
 
 def add_cmd(command_list, cmd, description):
     from telebot import types
-    print("CMD: "+cmd+" ("+str(len(cmd))+")")
-    print("DESC: "+description+" ("+str(len(description))+")\n")
+    #print("CMD: "+cmd+" ("+str(len(cmd))+")")
+    #print("DESC: "+description+" ("+str(len(description))+")\n")
     command_list.append(types.BotCommand(command=str(cmd), description=str(description)))
     return True
 
@@ -499,6 +503,7 @@ def add_cmd_bulk(command_list, cmd_list):
     from telebot import types
     for cmd, description in cmd_list:
         add_cmd(command_list, cmd, description)
+    return command_list
 
 def init_commands():
     command_list = []
@@ -521,7 +526,7 @@ mod_desc='Allows to manage installed mods through vote'
 mod_msg_helper='''
 Please use:
         /'''+mod_cmd+''' list
-        /'''+mod_cmd+''' install <Workshop ID> <Mod ID>
+        /'''+mod_cmd+''' install <Mod ID> <Workshop ID>
         /'''+mod_cmd+''' uninstall <Mod ID> OR <Workshop ID>'''
 setting_cmd='setting'
 setting_desc='Allows to manage server settings through vote'
@@ -532,6 +537,11 @@ Please use:
 help_cmd='help'
 help_desc='Provide the command legenda.'
 help_msg="List of the commands:\n/"+help_cmd+": "+help_desc+"\n/"+status_cmd+": "+status_desc+"\n/"+restart_cmd+": "+restart_desc+"\n/"+mod_cmd+": "+mod_msg_helper+"\n/"+setting_cmd+": "+setting_msg_helper
+
+### OTHER MESSAGES
+
+strip_modid_from_url_failed = "Getting modID from steam URL failed. Try using legacy syntax."
+not_a_workshop_url = "The URL you provided has not been recognized as a valid workshop URL. Try the legacy syntax maybe?"
 
 ### COMMANDS - RESTART DOUBLE CHECK - no database, just memory
 
@@ -581,7 +591,6 @@ if __name__ == '__main__':
         # SETUP COMMANDS
         commands = init_commands()
         if commands:
-            print(commands)
             bot.set_my_commands(commands)
 
         ########################################
@@ -595,7 +604,44 @@ if __name__ == '__main__':
             else:
                 bot.reply_to(message, "This command requires administrator-level or superior priviledges.", disable_notification=True)
                 return False
-        
+
+        def strip_IDs_from_steam(url):
+            try:
+                import requests
+                import re
+                response = requests.get(url)
+                if response.status_code == 200:
+                    source_code = response.text
+                    match = re.search(r"Mod ID:\s*([a-zA-Z0-9_()]+)", source_code)
+                    if match:
+                        mod_id = match.group(1)
+                        return are_valid_IDs(mod_id, url.split('=')[1])
+                    return False
+                else:
+                    logger(f"Failed to fetch page. Status code: {str(response.status_code)}", "ERROR")
+                    return False
+            except Exception as e:
+                logger(e, "ERROR")
+
+        def strip_img_url_from_steam(workshop_url):
+            try:
+                img_url = run_command("curl -kl "+workshop_url+" | grep \"steamuserimages-a.akamaihd.net/ugc\" | egrep -v \"property|twitter\" | grep \"letterbox=true\" | head -1 | awk \'{print $2}\'").split("?")[0][1:]
+                logger(f"A image url has been stripped from steam workshop: {img_url}", "INFO")
+                return img_url
+            except Exception as e:
+                logger(e, "ERROR")
+
+        def is_workshop_url(url):
+            try:
+                import re
+                pattern = r"https:\/\/steamcommunity\.com\/sharedfiles\/filedetails\/\?id=\d+"
+                if re.match(pattern, url):
+                    return True
+                else:
+                    return False
+            except Exception as e:
+                logger(e, "ERROR")
+
         ########################################
         ### SETUP LOG PARSING FUNCTION
         ########################################
@@ -637,10 +683,17 @@ if __name__ == '__main__':
         stop_monitoring_after = 8 #days
 
         def create_poll(chat_id, description, options, anonymous=False, multiple_answers=False):
-            reply_markup = {"type": "inline", "inline_keyboard": [[{"text": option, "callback_data": option} for option in options]]}
-            return bot.send_Poll(chat_id, question=description, options=options, is_anonymous=anonymous, allows_multiple_answers=multiple_answers, reply_markup=reply_markup)
+            poll = bot.send_poll(chat_id, question=description, options=options, is_anonymous=anonymous, allows_multiple_answers=multiple_answers)
+            return poll
 
-        def create_reform(proposer, userid, chat_id, ctype, change):
+        def stop_poll(reform):
+            import telegram
+            return bot.stop_poll(reform.chat_id, reform.poll.message_id)
+
+        def create_reform(message, ctype, change, legacy=False):
+            proposer = f"{message.from_user.first_name} {message.from_user.last_name}"
+            userid = message.from_user.id
+            chat_id = message.chat.id
             if ctype == 'mod':
                 action, modid, workshopid = change
                 new_reform = Reform
@@ -648,14 +701,21 @@ if __name__ == '__main__':
                 new_reform.proposer = proposer
                 new_reform.userid = userid
                 new_reform.chatid = chat_id
-                new_reform.name = f"{action} {modid} [https://steamcommunity.com/sharedfiles/filedetails/?id={workshop_id}]"
+                new_reform.name = f"Do you want to {action} {modid}?"
                 new_reform.date = timestamp()
                 new_reform.ctype = ctype
                 new_reform.change = Change_Mod
                 new_reform.change.action = action
                 new_reform.change.modid = modid
                 new_reform.change.workshopid = workshopid
+                # FINALLY, LAUNCH THE POLL
                 new_reform.poll = create_poll(chat_id, new_reform.name, ['Yes','No'])
+                # GET THE PICTURE OF THE MOD FROM STEAM
+                workshop_url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={workshopid}"
+                get_steam_image_url = strip_img_url_from_steam(workshop_url) 
+                # AND SEND THE LINK WITH THE PICTURE
+                bot.reply_to(new_reform.poll, workshop_url, disable_notification=True)
+                bot.send_photo(chat_id, get_steam_image_url)
             elif ctype == 'setting':
                 variable, value = change
                 new_reform = Reform
@@ -663,14 +723,14 @@ if __name__ == '__main__':
                 new_reform.proposer = proposer
                 new_reform.userid = userid
                 new_reform.chatid = chat_id
-                new_reform.name = f"set {variable} = {value}"
+                new_reform.name = f"Set {variable} = {value}"
                 new_reform.date = timestamp()
                 new_reform.ctype = ctype
                 new_reform.change = Change_Setting
                 new_reform.change.variable = variable
                 new_reform.change.value = value
                 new_reform.poll = create_poll(chat_id, new_reform.name, ['Yes','No'])
-            return new_reform.poll.message_id
+            return True
 
         def commit_change(reform_change):
             if change.ctype == 'mod':
@@ -678,9 +738,9 @@ if __name__ == '__main__':
                     install_mod(modid, workshopid)
                 elif change.action == 'uninstall':
                     uninstall_mod(modid, workshopid)
-                logger(f"Type: {change.ctype} Action: {change.action} ModID: {change.modid} WorkshopID: {change.workshopid} Date: {log_timestamp}", log_file())
+                logger(f"Type: {change.ctype} Action: {change.action} ModID: {change.modid} WorkshopID: {change.workshopid} Date: {log_timestamp}", "INFO")
             elif change.ctype == 'setting':
-                logger(f"Type: {change.ctype} Variable: {change.variable} Old Value: {get_setting(change.variable)} New Value: {change.value} Date: {log_timestamp}", log_file())
+                logger(f"Type: {change.ctype} Variable: {change.variable} Old Value: {get_setting(change.variable)} New Value: {change.value} Date: {log_timestamp}", "INFO")
                 set_setting(change.variable, change.value)
 
         def consensus(poll):
@@ -690,7 +750,7 @@ if __name__ == '__main__':
         def poll_monitor(reform):
             while timestamp() - days_passed >= stop_monitoring_after:
                 if consensus(reform.poll):
-                    bot.stop_poll(reform.poll.chat.id, reform.poll.message_id)
+                    stop_poll(reform)
                     commit_change(reform.change)
                     monitoranda.remove(reform)
                     break
@@ -757,26 +817,37 @@ if __name__ == '__main__':
                 else:
                     bot.reply_to(message, mod_msg_helper, disable_notification=True)
             elif command[1] == 'install':
-                if len(command) == 4:
+                if len(command) == 3:
+                    if is_workshop_url(command[2]):
+                        modid, workshopid = strip_IDs_from_steam(command[2])
+                        create_reform(message, 'mod', ['install', modid, workshopid], legacy=False)
+                    else:
+                        bot.reply_to(message, not_a_workshop_url, disable_notification=True)
+                        bot.reply_to(message, mod_msg_helper, disable_notification=True)
+                elif len(command) == 4:
                     installed = mod_is_installed(command[2], command[3])
+                    modid, workshopid = are_valid_IDs(command[2], command[3])
                     if installed:
-                        modid, workshopid = installed
                         bot.reply_to(message, "The mod you want to install is already installed. Is there a issue related to mod loading perhaps?", disable_notification=True)
                     else:
-                        create_reform(f"{message.from_user.first_name} {message.from_user.last_name}", message.from_user.id, message.chat.id, 'mod', 'install', modid, workshopid)
+                        create_reform(message, 'mod', ['install', modid, workshopid], legacy=True)
                 else:
                     bot.reply_to(message, mod_msg_helper, disable_notification=True)
             elif command[1] == 'uninstall':
                 if len(command) == 3:
-                    installed = mod_is_installed(command[2])
-                    if installed:
-                        modid, workshopid = installed
-                        create_reform(f"{message.from_user.first_name} {message.from_user.last_name}", message.from_user.id, message.chat.id, 'mod', ['uninstall', modid, workshopid])
+                    if is_workshop_url(command[2]):
+                        modid, workshopid = strip_IDs_from_steam(command[2])
+                        create_reform(message, 'mod', ['uninstall', modid, workshopid], legacy=False)
+                    elif mod_is_installed(command[2]):
+                        modid, workshopid = mod_is_installed(command[2])
+                        create_reform(message, 'mod', ['uninstall', modid, workshopid])
+                    else:
+                        bot.reply_to(message, mod_msg_helper, disable_notification=True)
                 elif len(command) == 4:
                     installed = mod_is_installed(command[2], command[3])
                     if installed:
                         modid, workshopid = installed
-                        create_reform(f"{message.from_user.first_name} {message.from_user.last_name}", message.from_user.id, message.chat.id, 'mod', ['install', modid, workshopid])
+                        create_reform(message, 'mod', ['uninstall', modid, workshopid])
                 else:
                     bot.reply_to(message, mod_msg_helper, disable_notification=True)
             else:
@@ -797,7 +868,7 @@ if __name__ == '__main__':
             elif command[1] == "set":
                 if len(command) == 4:
                     if is_setting(command[2]):
-                        create_reform(f"{message.from_user.first_name} {message.from_user.last_name}", message.from_user.id, message.chat.id, 'setting', [command[2], command[3]])
+                        create_reform(f"{message.from_user.first_name} {message.from_user.last_name}", message.from_user.id, message.chat.id, message.id, 'setting', [command[2], command[3]])
                     else:
                         bot.reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?", disable_notification=True)
                 else:
