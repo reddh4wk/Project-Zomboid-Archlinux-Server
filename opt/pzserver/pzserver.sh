@@ -10,8 +10,7 @@ case "$1" in
     tmux attach-session -t $SESSION_NAME
     ;;
   --start)
-    /opt/pzserver/python/bin/python /opt/pzserver/telegram_bot/pzserver_main.py >> /opt/pzserver/telegram_bot/pzserver_main.log &
-    /opt/pzserver/python/bin/python /opt/pzserver/telegram_bot/pzserver_log_parser.py >> /opt/pzserver/telegram_bot/pzserver_log_parser.log &    
+    /opt/pzserver/python/bin/python /opt/pzserver/telegram_bot/pzserver_tg.py >> /opt/pzserver/telegram_bot/pzserver_tg.log &    
     tmux new-session -d -s $SESSION_NAME "$SERVER_START_CMD"
     ;;
   --stop)
