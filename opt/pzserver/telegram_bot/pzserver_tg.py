@@ -46,7 +46,9 @@
 ### FUNDAMENTAL CONSTANTS
 ########################################
 
-ALL_CHATS=[-1002033569385]
+#SERVER_CHATS=[-1002033569385]
+SERVER_CHATS=[-4167198763]
+TEST_CHAT=[]
 TOKEN='6353909839:AAEQRzoSX9pXCL0sCtRUiw0aWW4via9bgzU'
 SERVICE_NAME ='pzserver'
 
@@ -143,23 +145,17 @@ def is_workshop_url(url):
     except Exception as e:
         logger(e, "ERROR")
 
-def strip_IDs_from_steam(url):
-    try:
-        import requests
-        import re
-        response = requests.get(url)
-        if response.status_code == 200:
-            source_code = response.text
-            match = re.search(r"Mod ID:\s*([a-zA-Z0-9_()]+)", source_code)
-            if match:
-                mod_id = match.group(1)
-                return is_modid_workshopid(mod_id, url.split('=')[1])
-            return False
-        else:
-            logger(f"Failed to fetch page. Status code: {str(response.status_code)}", "ERROR")
-            return False
-    except Exception as e:
-        logger(e, "ERROR")
+def ensure_max_occurrences(array, value, N):
+    count = 0
+    index = 0
+    while index < len(array):
+        if array[index] == value:
+            count += 1
+            if count > N:
+                del array[index]
+                continue  # Continue without incrementing index
+        index += 1
+    return array
 
 ########################################################################################################################
 ### AVOID DOUBLE EXECUTION OF THIS SCRIPT ON THE CURRENT SYSTEM
@@ -260,7 +256,7 @@ def get_settings():
                         else:
                             variable, value = data
                             setattr(settings, variable, Variable(value, description, file_path, line_number))
-                            #print("section: "+basename); print(variable+": "+value); print(description); print("-------------------------")
+                            #print("section: "+basename); print(variable+": "+value); print(description); print(line_number); print("-------------------------")
                             description = ""
                     line_number += 1
         return settings
@@ -280,23 +276,6 @@ def reload_settings():
     except Exception as e:
         logger(e, "ERROR")
 
-def changes_are_applied():
-    try:
-        reload_settings()
-        global pending_changes
-        failed=[]
-        for variable, new_value, path, line in pending_changes:
-            if getattr(global_settings, variable).value == new_value:
-                pass
-            else:
-                failed.append([variable, new_value, path, line])
-                logger("This change failed to commit. Invalid Setting? "+str([variable, new_value, path, line]), "WARNING", log_file())
-                return False
-        pending_changes = failed
-        return True
-    except Exception as e:
-        logger(e, "ERROR")
-
 def setting_timestamp():
     try:
         pass
@@ -305,13 +284,15 @@ def setting_timestamp():
 
 def save_setting_to_file(setting, value):
     try:
-        with open(getattr(global_settings, setting).path, 'r+') as file:
+        file_path = getattr(global_settings, setting).path
+        with open(file_path, 'r') as file:
             all_lines = file.readlines()
-            line = all_lines[getattr(global_settings, setting).line]
+            line_number = getattr(global_settings, setting).line
+            line = all_lines[line_number]
             if setting in line:
-                all_lines[getattr(global_settings, setting).line] = line.replace(getattr(global_settings, setting).value, value)
-                file.seek(0)
-                file.writelines(lines)
+                all_lines[line_number] = line.replace(getattr(global_settings, setting).value, value)
+                with open(file_path, 'w') as file:
+                    file.writelines(all_lines)
                 return True
             return False
     except Exception as e:
@@ -361,7 +342,7 @@ def is_workshopid(workshop_id):
     except Exception as e:
         logger(e, "ERROR")
 
-def is_modid_workshopid(id1, id2):
+def sort_valid_modid_workshopid(id1, id2):
     try:
         if is_workshopid(id1):
             if is_modid(id2):
@@ -378,41 +359,11 @@ def is_modid_workshopid(id1, id2):
     except Exception as e:
         logger(e, "ERROR")
 
-def get_mod_and_workshopid_list():
-    try:
-        return ((get_setting('Mods').value.split(','), get_setting('WorkshopItems').value.split(',')))
-    except Exception as e:
-        logger(e, "ERROR")
-
-def mod_is_installed(id1, id2):
-    try:
-        valid = is_modid_workshopid(id1, id2)
-        if valid:
-            modid, workshopid = valid
-            mod_list, workshop_list = get_mod_and_workshopid_list()
-            if modid in mod_list and workshopid in workshop_list:
-                if mod_list.index(modid) == workshop_list.index(workshopid):
-                    return True
-                else:
-                    logger("Mod IDs entered in chat ("+modid+", "+workshopid+") resulted installed but are not at the same position in config file. If mods are being loaded correctly, you can safely ignore this warning.", "WARNING", log_file()) #This case might be a hint for issues in loading mods in game
-                    return False
-            elif modid not in mod_list and workshopid not in workshop_list:
-                return False
-            else:
-                logger("Mod IDs entered in chat ("+modid+", "+workshopid+") resulted being only partially present in file. Probably a typo of the user who entered these IDs? If mods are being loaded correctly, you can safely ignore this warning.", "WARNING", log_file()) #This case might be a hint for issues in loading mods in game
-                return False
-        else:
-            logger("Mod IDs entered in chat ("+modid+", "+workshopid+") are invalid. Are you having fun or typo?", "WARNING", log_file())
-            return False
-    except Exception as e:
-        logger(e, "ERROR")
-
 def valid_modid_list(modid_list):
     try:
         if not modid_list:
             return True  # Empty string is allowed
-        modid_list = modid_list.split(';')
-        return all(all(is_modid(modid)) for modid in modid_list)
+        return all(is_modid(item) for item in modid_list)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -420,40 +371,126 @@ def valid_workshopid_list(workshopid_list):
     try:
         if not workshopid_list:
             return True  # Empty string is allowed
-        modid_list = workshopid_list.split(',')
-        return all(all(is_workshopid(modid)) for modid in modid_list)
+        return all(is_workshopid(item) for item in workshopid_list)
     except Exception as e:
         logger(e, "ERROR")
-           
+
+def valid_modid_workshopid_list(modid_list, workshopid_list):
+    try:
+        return len(modid_list) == len(workshopid_list) and valid_modid_list(modid_list) and valid_workshopid_list(workshopid_list)
+    except Exception as e:
+        logger(e, "ERROR")
+
+def get_mod_and_workshopid_list():
+    try:
+        modid_list = get_setting('Mods').value
+        workshopid_list = get_setting('WorkshopItems').value
+        if modid_list and workshopid_list:
+            return ((modid_list.split(';'), workshopid_list.split(';')))
+        else:
+            return (([],[])) # No mods installed
+    except Exception as e:
+        logger(e, "ERROR")
+
+def get_valid_modid_workshopid_list():
+    try:
+        modid_list, workshopid_list = get_mod_and_workshopid_list()
+        if valid_modid_workshopid_list(modid_list, workshopid_list):
+            return (modid_list, workshopid_list)
+        else:
+            logger("Sanity check failing for mod lists.", "WARNING")
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
+
+def get_workshopid_from_installed_mods(modid):
+    try:
+        valid_mod_lists = get_valid_modid_workshopid_list()
+        if valid_mod_lists:
+            modid_list, workshopid_list = valid_mod_lists
+            if is_modid(modid):
+                if modid in modid_list:
+                    return workshopid_list[modid_list.index(modid)]
+                else:
+                    return False
+            else:
+                return None
+        else:
+            return None
+    except Exception as e:
+        logger(e, "ERROR")
+        return None
+
+def strip_IDs_from_steam(url):
+    try:
+        import requests
+        import re
+        response = requests.get(url)
+        if response.status_code == 200:
+            source_code = response.text
+            match = re.search(r"Mod ID:\s*([a-zA-Z0-9_()]+)", source_code)
+            if match:
+                mod_id = match.group(1)
+                return sort_valid_modid_workshopid(mod_id, url.split('=')[1])
+            return False
+        else:
+            logger(f"Failed to fetch page. Status code: {str(response.status_code)}", "ERROR")
+            return None
+    except Exception as e:
+        logger(e, "ERROR")
+        return None
+            
+def mod_is_installed(id1, id2):
+    try:
+        valid = sort_valid_modid_workshopid(id1, id2)
+        if valid:
+            modid, workshopid = valid
+            valid = get_valid_modid_workshopid_list()
+            if valid:
+                mod_list, workshop_list = valid
+                if modid not in mod_list and workshopid not in workshop_list:
+                    return False
+                elif modid in mod_list:
+                    if workshopid in workshop_list:
+                        if mod_list.index(modid) == workshop_list.index(workshopid):
+                            return True
+                        else:
+                            logger("Mod IDs entered in chat ("+modid+", "+workshopid+") resulted installed but are not at the same position in config file. If mods are being loaded correctly, you can safely ignore this warning.", "WARNING") #This case might be a hint for issues in loading mods in game
+                            return None
+                    elif workshopid not in workshop_list:
+                        logger(f"{modid} is in the list but {workshopid} isn't. Weird, since a workshopid can have multiple modid but not viceversa. If mods are being loaded correctly, you can safely ignore this warning.", "WARNING") #This case might be a hint for issues in loading mods in game
+                        return None
+                else:
+                    logger(f"{modid} is not in the list but {workshopid} is. It could be a portion of the same mod with a different name.", "INFO", log_file()) #This case might be a hint for issues in loading mods in game
+                    return False
+            else:
+                return valid
+        else:
+            logger("Mod IDs entered in chat ("+modid+", "+workshopid+") are invalid. Are you having fun or what?", "WARNING", log_file())
+            return None
+    except Exception as e:
+        logger(e, "ERROR")
+        return None
+
 def install_mod(modid, workshopid, modid_setting='Mods', workshopid_setting='WorkshopItems'):
     try:
         modids=get_setting(modid_setting).value
         workshopids=get_setting(workshopid_setting).value
-        set_setting_value(modid_setting, modids+","+modid)
-        set_setting_value(workshopid_setting, modids+","+workshopid)
+        set_setting_value(modid_setting, modids+";"+modid)
+        set_setting_value(workshopid_setting, workshopids+";"+workshopid)
     except Exception as e:
         logger(e, "ERROR")
 
 def uninstall_mod(modid, workshopid, modid_setting='Mods', workshopid_setting='WorkshopItems'):
     try:
-        modids=get_setting(modid_setting).value
-        workshopids=get_setting(workshopid_setting).value
-        new_modid_list=get_setting(modid_setting).value.replace(modid, "").replace(",,", "")
-        new_workshopid_list=set_setting_value(get_setting(workshopid_setting).value.replace(workshopid, "").replace(",,", ""))
-        #MODIDS
-        if new_modid_list.endswith(","):
-            new_modid_list=new_modid_list[:-1]
-        elif new_mod_list.beginswith(","):
-            new_modid_list=new_modid_list[1:]
-        #WORKSHOPIDS
-        if new_workshopid_list.endswith(","):
-            new_workshopid_list=new_workshopid_list[:-1]
-        elif new_workshopid_list.beginswith(","):
-            new_workshopid_list=new_workshopid_list[1:]
-        #FINAL CHECK
-        if valid_modid_list and valid_workshopid_list:
-            set_setting_value('Mods', new_modid_list)
-            set_setting_value('WorkshopItems', new_workshopid_list)
+        modid_list, workshopid_list = get_valid_modid_workshopid_list()
+        position = modid_list.index(modid)
+        modid_list.pop(position)
+        workshopid_list.pop(position)
+        modid_list_text = ';'.join(map(str, modid_list))
+        workshopid_list_text = ';'.join(map(str, workshopid_list))
+        set_setting_value('Mods', modid_list_text)
+        set_setting_value('WorkshopItems', workshopid_list_text)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -499,8 +536,8 @@ def selfcreate_sqlite_table(table_name, **kwargs):
         logger(e, "ERROR")
 
 class Reform:
-    def __init__(self, reform_id=None, reform_chat_id=None, reform_name=None, reform_description=None, reform_date=None, reform_implemented=None,
-                poll_id=None, poll_is_boolean=None, poll_max_voters_number=None,poll_consensus_coefficient=None, poll_active_time=None, poll_yes_list=None, poll_no_list=None,
+    def __init__(self, reform_id=None, reform_chat_id=None, reform_name=None, reform_description=None, reform_date=None, reform_implemented=None, reform_is_active = None,
+                poll_id=None, poll_message_id=None, poll_options=None,poll_consensus_coefficient=None, poll_active_time=None, poll_yes_list="", poll_no_list="",
                 change_ctype=None, change_mod_action=None, change_mod_modid=None, change_mod_workshopid=None, change_setting_variable=None, change_setting_old_value=None, change_setting_new_value=None,
                 proposer_first_name=None, proposer_last_name=None, proposer_username=None, proposer_id=None):
         self.reform_id = reform_id
@@ -509,8 +546,10 @@ class Reform:
         self.reform_description = reform_description
         self.reform_date = reform_date
         self.reform_implemented = reform_implemented
+        self.reform_is_active = reform_is_active
         self.poll_id = poll_id
-        self.poll_max_voters_number = poll_max_voters_number
+        self.poll_message_id = poll_message_id
+        self.poll_options = poll_options
         self.poll_consensus_coefficient = poll_consensus_coefficient
         self.poll_active_time = poll_active_time
         self.poll_yes_list = poll_yes_list
@@ -526,6 +565,10 @@ class Reform:
         self.proposer_last_name = proposer_last_name
         self.proposer_username = proposer_username
         self.proposer_id = proposer_id
+    
+    def print_all(self):
+        for var_name, var_value in vars(self).items():
+            print(f"{var_name}: {var_value}")
 
 def init_reform_table():
     try:
@@ -540,9 +583,10 @@ def init_reform_table():
         reform_description TEXT,
         reform_date INTEGER,
         reform_implemented INTEGER,
+        reform_is_active INTEGER,
         poll_id INTEGER,
-        poll_is_boolean INTEGER,
-        poll_max_voters_number INTEGER,
+        poll_message_id INTEGER,
+        poll_options INTEGER,
         poll_consensus_coefficient REAL,
         poll_active_time INTEGER,
         poll_yes_list TEXT,
@@ -564,8 +608,9 @@ def init_reform_table():
         logger(e, "ERROR")
 
 class Player:
-    def __init__(self, steam_id, username, visit_count, last_seen, total_time, average_session, voted_yes, voted_no, proposed_change, got_change_accepted, got_change_rejected):
+    def __init__(self, steam_id, telegram_id, username, visit_count, last_seen, total_time, average_session, voted_yes, voted_no, proposed_change, got_change_accepted, got_change_rejected):
         self.steam_id = steam_id
+        self.telegram_id = telegram_id
         self.username = username
         self.visit_count = visit_count
         self.last_seen = last_seen
@@ -585,16 +630,17 @@ def init_players_table():
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS players (
         steam_id INTEGER PRIMARY KEY,
+        telegram_id INTEGER,
         usernames TEXT,
-        visit_count,
-        last_seen,
-        total_time,
-        average_session,
-        voted_yes,
-        voted_no,
-        proposed_change,
-        got_change_accepted,
-        got_change_rejected)''')
+        visit_count INTEGER,
+        last_seen TEXT,
+        total_time INTEGER,
+        average_session INTEGER,
+        voted_yes INTEGER,
+        voted_no INTEGER,
+        proposed_change INTEGER,
+        got_change_accepted INTEGER,
+        got_change_rejected INTEGER)''')
         conn.commit()
         conn.close()
     except Exception as e:
@@ -608,8 +654,32 @@ if __name__ == '__main__':
         logger(e, "ERROR")
 
 ########################################
-### QUERY FUNCTIONS
+### DB FUNCTIONS
 ########################################
+
+def save_reform(reform):
+    try:
+        import sqlite3
+        conn = sqlite3.connect(reforms_db)
+        c = conn.cursor()
+        # Check if the reform already exists in the table
+        c.execute('SELECT * FROM reforms WHERE reform_id = ?', (reform.reform_id,))
+        existing_reform = c.fetchone()
+        if existing_reform:
+            # Reform exists, update it
+            update_columns = ', '.join([f"{col} = ?" for col in reform.__dict__.keys()])
+            update_values = tuple(reform.__dict__.values()) + (reform.reform_id,)  # Include reform_id for WHERE clause
+            c.execute(f'UPDATE reforms SET {update_columns} WHERE reform_id = ?', update_values)
+        else:
+            # Reform does not exist, insert it
+            columns = ', '.join([col for col in reform.__dict__.keys()])
+            placeholders = ', '.join(['?' for _ in range(len(reform.__dict__))])
+            values = tuple(reform.__dict__.values())
+            c.execute(f'INSERT INTO reforms ({columns}) VALUES ({placeholders})', values)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger(e, "ERROR")
 
 def get_player(steam_id):
     try:
@@ -659,10 +729,46 @@ def get_reform_by_poll_id(poll_id):
     except Exception as e:
         logger(e, "ERROR")
 
-def commit_reform_changes(reform_id):
+def get_mod_clone_change(modid, workshopid, action):
+    try:
+        import sqlite3
+        import os
+        conn = sqlite3.connect(reforms_db)
+        c = conn.cursor()
+        c.execute('SELECT * FROM reforms WHERE change_mod_modid = ? AND change_mod_workshopid = ? AND change_mod_action = ? AND reform_is_active = ?', (modid, workshopid, action, 1))
+        result = c.fetchone()
+        conn.close()
+        if result:
+            return Reform(*result)
+        else:
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
     pass
 
-def change_duplicate():
+def get_setting_clone_change(variable, new_value):
+    try:
+        import sqlite3
+        import os
+        conn = sqlite3.connect(reforms_db)
+        c = conn.cursor()
+        c.execute('''
+            SELECT *
+            FROM reforms
+            WHERE change_setting_variable = ?  
+                AND change_setting_new_value = ?
+        ''', (variable, new_value, 1))
+        result = c.fetchone()
+        conn.close()
+        if result:
+            return Reform(*result)
+        else:
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
+    pass
+
+def link_tg_account_to_player(tg_user_id, steam_id):
     pass
 
 ########################################################################################################################
@@ -705,8 +811,11 @@ mod_desc='Allows to manage installed mods through vote'
 mod_msg_helper='''
 Please use:
         /'''+mod_cmd+''' list
+        /'''+mod_cmd+''' install <Mod URL>
         /'''+mod_cmd+''' install <Mod ID> <Workshop ID>
-        /'''+mod_cmd+''' uninstall <Mod ID> OR <Workshop ID>'''
+        /'''+mod_cmd+''' uninstall <Mod URL>
+        /'''+mod_cmd+''' uninstall <Mod ID>
+        /'''+mod_cmd+''' uninstall <Mod ID> <Workshop ID>'''
 setting_cmd='setting'
 setting_desc='Allows to manage server settings through vote'
 setting_msg_helper='''
@@ -721,6 +830,10 @@ help_msg="List of the commands:\n/"+help_cmd+": "+help_desc+"\n/"+status_cmd+": 
 
 strip_modid_from_url_failed = "Getting modID from steam URL failed. Try using legacy syntax."
 not_a_workshop_url = "The URL you provided has not been recognized as a valid workshop URL. Try the legacy syntax maybe?"
+already_installed_msg = "The mod you want to install is already installed."
+already_uninstalled_msg = "The mod you want to install is already uninstalled."
+msg_modid_invalid = "The mod ID entered are being considered invalid."
+msg_no_mods_installed = "There are no mods installed."
 
 ### COMMANDS - RESTART DOUBLE CHECK - no database, just memory
 
@@ -773,22 +886,22 @@ if __name__ == '__main__':
 ### BOT RELATED USEFUL TOOLS
 ########################################################################################################################
 
-def send_to_all(text, silent=True):
-    for each in ALL_CHATS:
-        if silent:
-            bot.send_message(each, text, disable_notification=True)
-        else:
-            bot.send_message(each, text)
+def server_chat_message(text, disable_notification=True):
+    for each in SERVER_CHATS:
+        bot.send_message(each, text, disable_notification=disable_notification)
 
-def reply_to(message, text):
-    pass
+def test_message(text, disable_notification=True):
+    bot.send_message(TEST_CHAT, text, disable_notification=disable_notification)
+
+def reply_to(message, text, disable_notification=True):
+    bot.reply_to(message, text, disable_notification=disable_notification)
 
 def member_is_admin(message):
     member = bot.get_chat_member(message.chat.id, message.from_user.id)
     if member.status in ['creator','administrator']:
         return True
     else:
-        bot.reply_to(message, "This command requires administrator-level or superior priviledges.", disable_notification=True)
+        reply_to(message, "This command requires administrator-level or superior priviledges.", disable_notification=True)
         return False
 
 ########################################################################################################################
@@ -818,13 +931,13 @@ log_key_death='replacing dead player'
 
 def player_client_login_event(steamid, username):
     try:
-        send_to_all("A player connected to the server: "+username)
+        server_chat_message("A player connected to the server: "+username)
     except Exception as e:
         logger(e, "ERROR")
         
 def player_client_logout_event(steamid, username):
     try:
-        send_to_all("A player left the server: "+username)
+        server_chat_message("A player left the server: "+username)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -832,14 +945,14 @@ def alert_bot(keyword, line):
     try:
         import re
         if keyword == log_key_start:
-            send_to_all(SERVICE_NAME.capitalize()+" is now online.")
+            server_chat_message(SERVICE_NAME.capitalize()+" is now online.")
             if not changes_are_applied():
-                send_to_all("Seems like some changes were not applied since last reboot. Check logs for more info.")
+                server_chat_message("Seems like some changes were not applied since last reboot. Check logs for more info.")
         elif keyword == log_key_stop:
-            send_to_all(SERVICE_NAME.capitalize()+" is going down...")
+            server_chat_message(SERVICE_NAME.capitalize()+" is going down...")
         elif command_flag and keyword == log_key_cmd:
             if '"quit"' not in line and '"save"' not in line:
-                send_to_all("A"+line[44:])
+                server_chat_message("A"+line[44:])
         elif join_flag and keyword == log_key_client_init:
             match = re.search(r'username="([^"]*)" steam-id=(\d+)', log)
             if match:
@@ -894,102 +1007,148 @@ def create_poll(chat_id, description, options, anonymous=False, multiple_answers
     poll = bot.send_poll(chat_id, question=description, options=options, is_anonymous=anonymous, allows_multiple_answers=multiple_answers)
     return poll
 
-def stop_poll(reform):
-    reform = get_reform_by_poll_id(poll_id)
-    reform.poll_active_time = reform.reform_date - unix_timestamp()
-    return bot.stop_poll(reform.chat_id, reform.poll_id)
-
-def get_poll_max_voters_number(chat_id):
-    return bot.get_chat_members_count(chat_id)
-
-def consensus(poll_id, votes_from = 'db', max_voters_now = False, consensus = False, virdict = None):
-    if votes_from == 'db':
+def stop_poll(reform=None, poll_id=None):
+    if not reform:
         reform = get_reform_by_poll_id(poll_id)
-    if max_voters_now:
-        max_voters = bot.get_chat_members_count(reform.reform_chat_id)
-    else:
-        max_voters = reform.poll_max_voters_number
-    if reform.poll_is_boolean:
-        consensus_threshold = max_voters // 2 + 1 # Majority threshold
+    reform.poll_active_time = reform.reform_date - unix_timestamp()
+    save_reform(reform)
+    return bot.stop_poll(reform.reform_chat_id, reform.poll_message_id)
+
+def deny_change(reform=None, poll_id=None):
+    if not reform:
+        reform = get_reform_by_poll_id(poll_id)
+    reform.reform_is_active = 0
+    reform.reform_implemented = 0
+    save_reform(reform)
+    reform.print_all()
+
+def implement_change(reform=None, poll_id=None):
+    if not reform:
+        reform = get_reform_by_poll_id(poll_id)
+    if reform.change_ctype == 'mod':
+        if reform.change_mod_action == 'install':
+            install_mod(reform.change_mod_modid, reform.change_mod_workshopid)
+        elif reform.change_mod_action == 'uninstall':
+            uninstall_mod(reform.change_mod_modid, reform.change_mod_workshopid)
+        logger(f"Type: {reform.change_ctype} Action: {reform.change_mod_action} ModID: {reform.change_mod_modid} WorkshopID: {reform.change_mod_workshopid} Date: {log_timestamp}", "INFO")
+    elif reform.change_ctype == 'setting':
+        logger(f"Type: {reform.change_ctype} Variable: {reform.change_setting_variable} Old Value: {reform.change_setting_old_value} Current Value: {get_setting(change.variable).value} New Value: {reform.change_setting_new_value} Date: {log_timestamp}", "INFO")
+        set_setting_value(reform.change_setting_variable, reform.change_setting_new_value)
+    reform.reform_is_active = 0
+    reform.reform_implemented = 1
+    save_reform(reform)
+    reform.print_all()
+
+def consensus(reform=None, poll_id=None, votes_from = 'db', consensus = False, virdict = None):
+    try:
         if votes_from == 'db':
-                yes_votes = len(reform.poll_yes_list.split(','))
-                no_votes = len(reform.poll_no_list.split(','))
+            if not reform:
+                reform = get_reform_by_poll_id(poll_id)
+        max_voters = bot.get_chat_members_count(reform.reform_chat_id)
+        if reform.poll_options == 2:
+            consensus_threshold = max_voters // reform.poll_options + 1 # Majority threshold
+            consensus_threshold = max_voters // reform.poll_options # Test threshold - put yourself in a group with just you and the bot
+        if votes_from == 'db':
+                if reform.poll_yes_list:
+                    yes_votes = len(reform.poll_yes_list.split(','))
+                else:
+                    yes_votes = 0
+                if reform.poll_no_list:
+                    no_votes = len(reform.poll_no_list.split(','))
+                else:
+                    no_votes = 0
                 if yes_votes >= consensus_threshold:
                     consensus, virdict = (True, True)
-                    consensus_coefficient = yes_votes / consensus_threshold
+                    reform.poll_consensus_coefficient = yes_votes / consensus_threshold
                 elif no_votes >= consensus_threshold:
                     consensus, virdict = (True, False)
-                    consensus_coefficient = no_votes / consensus_threshold
+                    reform.poll_consensus_coefficient = no_votes / consensus_threshold
         elif votes_from == 'tg':
             pass
-    if consensus:
-        stop_poll(poll_id)
-        reform.poll_consensus_coefficient = consensus_coefficient
-        commit_change(reform.reform_id)
-        return (consensus, virdict)
-    else:
-        return (consensus, virdict)
-
+        if consensus:
+            if virdict:
+                implement_change(reform)
+            else:
+                deny_change(reform)
+            stop_poll(reform)
+            return (consensus, virdict)
+        else:
+            return (consensus, virdict)
+        save_reform(reform)
+    except Exception as e:
+        logger(e, "ERROR")
+        
 def update_poll_vote(voter, poll_id, votes):
     try:
         reform = get_reform_by_poll_id(poll_id)
-        if reform.poll_is_boolean:
-            vote = votes[0]
-            if vote == True:
-                if reform.poll_yes_list:
-                    reform.poll_yes_list = f"{reform.poll_yes_list}, {voter}"
-                else:
-                    yes_list = reform.poll_yes_list.split(',')
-                    if voter not in yes_list:
-                        yes_list.append(voter)
-                        reform.poll_yes_list = f"{reform.poll_yes_list}, {voter}"
-                        # WRITE TO REFORM DB
-            elif vote == False:
-                if reform.poll_no_list:
-                    reform.poll_no_list = f"{reform.poll_no_list}, {voter}"
-                else:
-                    no_list = reform.poll_no_list.split(',')
-                    if voter not in no_list:
-                        no_list.append(voter)
-                        reform.poll_no_list = f"{reform.poll_no_list}, {voter}"
-                        # WRITE TO REFORM DB
+        #reform.print_all()
+        if reform.poll_options == 2:
+            yes_option_n = 0
+            no_option_n = 1
+            voter = str(voter)
+            is_yes_list = False
+            is_no_list = False
+            if len(votes) > 0:
+                if votes[0] == yes_option_n:
+                    is_yes_list = True
+                    if reform.poll_yes_list == "":
+                        reform.poll_yes_list = voter
+                    else:
+                        reform.poll_yes_list = ', '.join(map(str, ensure_max_occurrences(reform.poll_yes_list.split(',').append(voter), voter, 1)))
+                elif votes[0] == no_option_n:
+                    is_no_list = True
+                    if reform.poll_no_list == "":
+                        reform.poll_no_list = voter
+                    else:
+                        reform.poll_no_list = ', '.join(map(str, ensure_max_occurrences(reform.poll_no_list.split(',').append(voter), voter, 1)))
             else: # retract_vote_option
                 if reform.poll_yes_list:
-                    yes_list = reform.poll_yes_list.split(',')
-                    if voter in yes_list:
-                        yes_list.pop(yes_list.index(voter))
-                        removed_from_yes_list = True
+                    vote_list = reform.poll_yes_list.split(',')
+                    reform.poll_yes_list = ', '.join(map(str, ensure_max_occurrences(vote_list, voter, 0)))
                 if reform.poll_no_list:
-                    no_list = reform.poll_yes_list.split(',')
-                    if voter in no_list:
-                        no_list.pop(no_list.index(voter))
-                        removed_from_no_list = True
-                if removed_from_yes_list != removed_from_no_list:
-                    return True
-                if not reform.poll_yes_list and not reform.poll_no_listt:
-                    logger("Vote is being retracted but vote lists are empty. What's happening?", "WARNING")
-                if not removed_from_yes_list and not removed_from_no_list:
-                    logger("Vote is being retracted but there was no vote to retract in DB. What's happening?", "WARNING")
-                elif removed_from_yes_list and removed_from_no_list:
-                    logger("Vote is being retracted from multiple list even if this was not a multi-answer poll. What's happening?", "WARNING")
-                else:
-                    logger("Vote is being retracted but I couldn't interpret this action correctly.", "WARNING")
+                    vote_list = reform.poll_no_list.split(',')
+                    reform.poll_no_list = ', '.join(map(str, ensure_max_occurrences(vote_list, voter, 0)))
+            #reform.print_all()
+            save_reform(reform)
+            consensus(reform)
     except Exception as e:
         logger(e, "ERROR")
 
-def create_reform(message, ctype, change, legacy=False):
+def active_clone_changes(ctype, change):
     try:
-        if not change_duplicate():
-            import sqlite3
+        if ctype == 'mod':
+            action, modid, workshopid = change
+            return get_mod_clone_change(modid, workshopid, action)
+        elif ctype == 'setting':
+            variable, value = change
+            return get_setting_clone_change(variable, value)
+    except Exception as e:
+        logger(e, "ERROR")
+
+def mod_poll_launch(new_reform):
+    poll = create_poll(new_reform.reform_chat_id, new_reform.reform_name, ['Yes','No'])
+    workshop_url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={new_reform.change_mod_workshopid}"
+    get_steam_image_url = strip_img_url_from_steam(workshop_url) 
+    reply_to(poll, workshop_url)
+    bot.send_photo(new_reform.reform_chat_id, get_steam_image_url)
+    return poll
+
+def setting_poll_launch(new_reform):
+    poll = create_poll(new_reform.reform_chat_id, new_reform.reform_name, ['Yes','No'])
+    return poll
+
+def create_reform(message, ctype, change):
+    try:
+        clone = active_clone_changes(ctype, change)
+        if not clone:
             import os
-            conn = sqlite3.connect(reforms_db)
-            c = conn.cursor()
             new_reform = Reform()
             new_reform.reform_id = message.id
             new_reform.reform_chat_id = message.chat.id
             new_reform.reform_description = "" # FUTURE IMPLEMENTATION
             new_reform.reform_date = unix_timestamp()
-            new_reform.poll_max_voters_number = get_poll_max_voters_number(message.chat.id)
+            new_reform.reform_implemented = 0
+            new_reform.reform_is_active = 1
             new_reform.proposer_first_name = message.from_user.first_name
             new_reform.proposer_last_name = message.from_user.last_name
             new_reform.proposer_username = message.from_user.username
@@ -1001,51 +1160,44 @@ def create_reform(message, ctype, change, legacy=False):
                 new_reform.change_mod_modid = modid
                 new_reform.change_mod_workshopid = workshopid
                 new_reform.reform_name = f"Do you want to {action} {modid}?"
-                new_reform.poll_is_boolean = 1
-                # FINALLY, LAUNCH THE POLL
-                poll = create_poll(message.chat.id, new_reform.reform_name, ['Yes','No'])
-                # GET THE PICTURE OF THE MOD FROM STEAM
-                workshop_url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={workshopid}"
-                get_steam_image_url = strip_img_url_from_steam(workshop_url) 
-                # AND SEND THE LINK WITH THE PICTURE
-                bot.reply_to(poll, workshop_url, disable_notification=True)
-                bot.send_photo(message.chat.id, get_steam_image_url)
+                poll = mod_poll_launch(new_reform)
             elif ctype == 'setting':
                 variable, value = change
                 new_reform.change_setting_variable = variable
                 new_reform.change_setting_old_value = get_setting(variable).value
                 new_reform.change_setting_new_value = value
                 new_reform.reform_name = f"Set {variable} = {value}"
-                new_reform.poll_is_boolean = 1
-                # FINALLY, LAUNCH THE POLL
-                poll = create_poll(message.chat.id, new_reform.reform_name, ['Yes','No'])
-            new_reform.poll_id = poll.id
-            # Construct the SQL query based on the attributes of the Reform object
-            columns = ', '.join([col for col in new_reform.__dict__.keys()])
-            placeholders = ', '.join(['?' for _ in range(len(new_reform.__dict__))])
-            values = tuple(new_reform.__dict__.values())
-            # Insert the values into the table
-            c.execute(f'INSERT INTO reforms ({columns}) VALUES ({placeholders})', values)
-            conn.commit()
-            conn.close()
+                poll = setting_poll_launch(new_reform)
+            new_reform.poll_id = poll.poll.id
+            new_reform.poll_message_id = poll.message_id
+            new_reform.poll_options = len(poll.poll.options)
+            #new_reform.print_all()
+            save_reform(new_reform)
         else:
+            # Why storing entire objects and reparse them when you can create fake ones with only the necessary info you already stored?
+            class fakemessage:
+                def __init__(self, chat_id, message_id):
+                    self.chat_id = chat_id
+                    self.message_id = message_id
+                @property
+                def chat(self):
+                    return fakechat(self.chat_id)
+                @property
+                def id(self):
+                    return self.message_id
+            class fakechat:
+                def __init__(self, chat_id):
+                    self.chat_id = chat_id
+                @property
+                def id(self):
+                    return self.chat_id
+            # Eat your broccoli, bitch
+            print(clone.reform_chat_id)
+            print(clone.poll_message_id)
+            message = fakemessage(chat_id=clone.reform_chat_id, message_id=clone.poll_message_id)
             reply_to(message, "This change has been already proposed and is under trial process.")
     except Exception as e:
         logger(e, "ERROR")
-
-def commit_change(reform_id):
-    reform = get_reform(reform_id)
-    if reform.change_ctype == 'mod':
-        if reform.change_mod_action == 'install':
-            install_mod(modid, workshopid)
-        elif reform.change_mod_action == 'uninstall':
-            uninstall_mod(modid, workshopid)
-        logger(f"Type: {reform.change_ctype} Action: {reform.change_mod_action} ModID: {reform.change_mod_modid} WorkshopID: {reform.change_mod_workshopid} Date: {log_timestamp}", "INFO")
-    elif reform.change_ctype == 'setting':
-        logger(f"Type: {reform.change_ctype} Variable: {reform.change_setting_variable} Old Value: {reform.change_setting_old_value} Current Value: {get_setting(change.variable).value} New Value: {reform.change_setting_new_value} Date: {log_timestamp}", "INFO")
-        set_setting_value(reform.change_setting_variable, reform.change_setting_new_value)
-    reform.reform_implemented = 1
-    commit_reform_changes(reform_id)
 
 ########################################################################################################################
 ### MAIN - COMMAND HANDLERS
@@ -1056,11 +1208,15 @@ if __name__ == '__main__':
         # START
         @bot.message_handler(commands=[start_cmd])
         def send_start(message):
-            bot.reply_to(message, start_msg, disable_notification=True)
+            reply_to(message, start_msg)
         # HELP
         @bot.message_handler(commands=[help_cmd])
         def send_help(message):
-            bot.reply_to(message, help_msg, disable_notification=True)
+            reply_to(message, help_msg)
+        # SHOW CHAT ID
+        @bot.message_handler(commands=['id'])
+        def send_help(message):
+            reply_to(message, f"CHAT ID: {message.chat.id}")
         # STATUS
         @bot.message_handler(commands=[status_cmd])
         def send_status(message):
@@ -1071,7 +1227,7 @@ if __name__ == '__main__':
                 status = "down."
             else:
                 status = "???"
-            bot.reply_to(message, "The PZserver is currently "+status)
+            reply_to(message, "The PZserver is currently "+status)
         # RESTART
         @bot.message_handler(commands=[restart_cmd])
         def restart_server(message):
@@ -1079,10 +1235,9 @@ if __name__ == '__main__':
             if is_admin:
                 if check_service_status():
                     save_restart(restart_cmd, message.from_user.id)
-                    print(global_commands)
-                    bot.reply_to(message, restart_msg, disable_notification=True)
+                    reply_to(message, restart_msg)
                 else:
-                    bot.reply_to(message, "The server is currently down.", disable_notification=True)
+                    reply_to(message, "The server is currently down.")
         @bot.message_handler(commands=[restart_confirm_cmd])
         def confirm_restart(message):
             restart_required = check_restart(restart_cmd, message.from_user.id)
@@ -1098,56 +1253,62 @@ if __name__ == '__main__':
             command = message.text.split()
             if command[1] == 'list':
                 if len(command) == 2:
-                    modid_list, workshopid_list = get_mod_and_workshopid_list()
+                    modid_list, workshopid_list = get_valid_modid_workshopid_list()
                     if not len(modid_list) and not len(workshopid_list):
-                        bot.reply_to(message, "There are no mods installed.", disable_notification=True)
+                        reply_to(message, "There are no mods installed.")
+                        return False
                     elif not len(modid_list) or not len(workshopid_list):
-                        bot.reply_to(message, "It seems only two of the mod lists is empty. Corrupt?", disable_notification=True)
+                        reply_to(message, msg_no_mods_installed)
                         logger("It seems only two of the mod lists is empty. Corrupt?", "WARNING")
+                        return False
                     elif len(modid_list) == len(workshopid_list):
                         counter = 0
                         for modid in modid_list:
                             for workshopid in workshopid_list:
                                 counter += 1
-                                bot.reply_to(message, f"{counter}) {modid}\n\nhttps://steamcommunity.com/sharedfiles/filedetails/?id="+mod, disable_notification=True)
+                                reply_to(message, f"{counter}) {modid} [{workshopid}]\n\nhttps://steamcommunity.com/sharedfiles/filedetails/?id="+workshopid)
+                        return True
                 else:
-                    bot.reply_to(message, mod_msg_helper, disable_notification=True)
-            elif command[1] == 'install':
+                    reply_to(message, mod_msg_helper)
+                    return False
+            elif command[1] in ['install', 'uninstall']:
                 if len(command) == 3:
                     if is_workshop_url(command[2]):
-                        modid, workshopid = strip_IDs_from_steam(command[2])
-                        create_reform(message, 'mod', ['install', modid, workshopid], legacy=False)
+                        stripped = strip_IDs_from_steam(command[2])
+                        if stripped:
+                            modid, workshopid = stripped
+                            if command[1] == 'install':
+                                if mod_is_installed(modid, workshopid):
+                                    reply_to(message, already_installed_msg)
+                                    return False
+                            elif command[1] == 'uninstall':
+                                if not mod_is_installed(modid, workshopid):
+                                    reply_to(message, already_uninstalled_msg)
+                                    return False
+                            create_reform(message, 'mod', [command[1], modid, workshopid])
+                            return True
+                    elif command[1] == 'uninstall':
+                        stripped = get_workshopid_from_installed_mods(command[2])
+                        if stripped:
+                            modid, workshopid = stripped
+                            create_reform(message, 'mod', [command[1], modid, workshopid])
+                            return True
+                        elif stripped == False:
+                            reply_to(message, already_uninstalled_msg)
                     else:
-                        bot.reply_to(message, not_a_workshop_url, disable_notification=True)
-                        bot.reply_to(message, mod_msg_helper, disable_notification=True)
+                        reply_to(message, mod_msg_helper)
                 elif len(command) == 4:
-                    installed = mod_is_installed(command[2], command[3])
-                    modid, workshopid = is_modid_workshopid(command[2], command[3])
-                    if installed:
-                        bot.reply_to(message, "The mod you want to install is already installed. Is there a issue related to mod loading perhaps?", disable_notification=True)
+                    valid = sort_valid_modid_workshopid(command[2], command[3])
+                    if valid:
+                        modid, workshopid = valid
+                        create_reform(message, 'mod', [command[1], modid, workshopid])
+                        return True
                     else:
-                        create_reform(message, 'mod', ['install', modid, workshopid], legacy=True)
+                        reply_to(message, msg_modid_invalid)
                 else:
-                    bot.reply_to(message, mod_msg_helper, disable_notification=True)
-            elif command[1] == 'uninstall':
-                if len(command) == 3:
-                    if is_workshop_url(command[2]):
-                        modid, workshopid = strip_IDs_from_steam(command[2])
-                        create_reform(message, 'mod', ['uninstall', modid, workshopid], legacy=False)
-                    elif mod_is_installed(command[2]):
-                        modid, workshopid = mod_is_installed(command[2])
-                        create_reform(message, 'mod', ['uninstall', modid, workshopid])
-                    else:
-                        bot.reply_to(message, mod_msg_helper, disable_notification=True)
-                elif len(command) == 4:
-                    installed = mod_is_installed(command[2], command[3])
-                    if installed:
-                        modid, workshopid = installed
-                        create_reform(message, 'mod', ['uninstall', modid, workshopid])
-                else:
-                    bot.reply_to(message, mod_msg_helper, disable_notification=True)
+                    reply_to(message, mod_msg_helper)
             else:
-                bot.reply_to(message, mod_msg_helper, disable_notification=True)
+                reply_to(message, mod_msg_helper)
         # MODIFY PZSERVER SETTINGS
         @bot.message_handler(commands=[setting_cmd])
         def setting_command(message):
@@ -1155,22 +1316,22 @@ if __name__ == '__main__':
             if command[1] == "get":
                 if len(command) == 3:
                     if is_setting(command[2]):
-                        bot.reply_to(message, get_setting(command[2]).value, disable_notification=True)
-                        bot.reply_to(message, get_setting(command[2]).description, disable_notification=True)
+                        reply_to(message, get_setting(command[2]).value)
+                        reply_to(message, get_setting(command[2]).description)
                     else:
-                        bot.reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?", disable_notification=True)
+                        reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?")
                 else:
-                    bot.reply_to(message, setting_msg_helper, disable_notification=True)
+                    reply_to(message, setting_msg_helper)
             elif command[1] == "set":
                 if len(command) == 4:
                     if is_setting(command[2]):
                         create_reform(f"{message.from_user.first_name} {message.from_user.last_name}", message.from_user.id, message.chat.id, message.id, 'setting', [command[2], command[3]])
                     else:
-                        bot.reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?", disable_notification=True)
+                        reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?")
                 else:
-                    bot.reply_to(message, setting_msg_helper, disable_notification=True)
+                    reply_to(message, setting_msg_helper)
             else:
-                bot.reply_to(message, setting_msg_helper, disable_notification=True)
+                reply_to(message, setting_msg_helper)
         # LISTEN FOR UPDATES FROM YOUR NON-ANONYMOUS POLLS
         @bot.poll_answer_handler()
         def poll_vote_event(update):
