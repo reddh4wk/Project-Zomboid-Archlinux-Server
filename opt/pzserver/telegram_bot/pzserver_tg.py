@@ -46,10 +46,10 @@
 ### FUNDAMENTAL CONSTANTS
 ########################################
 
-#SERVER_CHATS=[-1002033569385]
-SERVER_CHATS=[-4167198763]
+SERVER_CHATS=[] #Production
+#SERVER_CHATS=[] #Test
 TEST_CHAT=[]
-TOKEN='6353909839:AAEQRzoSX9pXCL0sCtRUiw0aWW4via9bgzU'
+TOKEN=''
 SERVICE_NAME ='pzserver'
 
 ########################################################################################################################
@@ -831,7 +831,7 @@ help_msg="List of the commands:\n/"+help_cmd+": "+help_desc+"\n/"+status_cmd+": 
 strip_modid_from_url_failed = "Getting modID from steam URL failed. Try using legacy syntax."
 not_a_workshop_url = "The URL you provided has not been recognized as a valid workshop URL. Try the legacy syntax maybe?"
 already_installed_msg = "The mod you want to install is already installed."
-already_uninstalled_msg = "The mod you want to install is already uninstalled."
+msg_mod_not_installed = "The mod you want to uninstall is not installed"
 msg_modid_invalid = "The mod ID entered are being considered invalid."
 msg_no_mods_installed = "There are no mods installed."
 
@@ -1283,26 +1283,38 @@ if __name__ == '__main__':
                                     return False
                             elif command[1] == 'uninstall':
                                 if not mod_is_installed(modid, workshopid):
-                                    reply_to(message, already_uninstalled_msg)
+                                    reply_to(message, msg_mod_not_installed)
                                     return False
                             create_reform(message, 'mod', [command[1], modid, workshopid])
                             return True
                     elif command[1] == 'uninstall':
                         stripped = get_workshopid_from_installed_mods(command[2])
                         if stripped:
-                            modid, workshopid = stripped
-                            create_reform(message, 'mod', [command[1], modid, workshopid])
+                            workshopid = stripped
+                            create_reform(message, 'mod', [command[1], command[2], workshopid])
                             return True
                         elif stripped == False:
-                            reply_to(message, already_uninstalled_msg)
+                            reply_to(message, msg_mod_not_installed)
                     else:
                         reply_to(message, mod_msg_helper)
                 elif len(command) == 4:
                     valid = sort_valid_modid_workshopid(command[2], command[3])
                     if valid:
                         modid, workshopid = valid
-                        create_reform(message, 'mod', [command[1], modid, workshopid])
-                        return True
+                        if not mod_is_installed(modid, workshopid):
+                            if command[1] == 'uninstall':
+                                reply_to(message, msg_mod_not_installed)
+                                return False
+                            elif command[1] == 'install':
+                                create_reform(message, 'mod', [command[1], modid, workshopid])
+                                return True
+                        else:
+                            if command[1] == 'uninstall':
+                                create_reform(message, 'mod', [command[1], modid, workshopid])
+                                return True
+                            elif command[1] == 'install':
+                                reply_to(message, already_installed_msg)
+                                return False
                     else:
                         reply_to(message, msg_modid_invalid)
                 else:
