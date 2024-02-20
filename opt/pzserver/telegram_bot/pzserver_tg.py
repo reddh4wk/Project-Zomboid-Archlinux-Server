@@ -46,10 +46,9 @@
 ### FUNDAMENTAL CONSTANTS
 ########################################
 
-SERVER_CHATS=[] #Production
-#SERVER_CHATS=[] #Test
-TEST_CHAT=[]
-TOKEN=''
+SERVER_CHATS=[-1002033569385] #Production
+#SERVER_CHATS=[-4167198763] #Test
+TOKEN='6353909839:AAEQRzoSX9pXCL0sCtRUiw0aWW4via9bgzU'
 SERVICE_NAME ='pzserver'
 
 ########################################################################################################################
@@ -517,7 +516,6 @@ def selfcreate_sqlite_table(table_name, **kwargs):
         for key, value in kwargs.items():
             valid_types = [int, float, str]
             if type(value) not in valid_types:
-                print(f"Unsupported type for column '{key}'")
                 return False
             sqlite_type = {int: "INTEGER", float: "REAL", str: "TEXT"}[type(value)]
             if key == pk:
@@ -525,10 +523,8 @@ def selfcreate_sqlite_table(table_name, **kwargs):
             else:
                 columns.append(f"{key} {sqlite_type}")
         if len(columns) < 1:
-            print("No valid columns provided")
             return False
         create_table_sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({', '.join(columns)})"
-        print(create_table_sql)
         c.execute(create_table_sql)
         conn.commit()
         conn.close()
@@ -537,7 +533,7 @@ def selfcreate_sqlite_table(table_name, **kwargs):
 
 class Reform:
     def __init__(self, reform_id=None, reform_chat_id=None, reform_name=None, reform_description=None, reform_date=None, reform_implemented=None, reform_is_active = None,
-                poll_id=None, poll_message_id=None, poll_options=None,poll_consensus_coefficient=None, poll_active_time=None, poll_yes_list="", poll_no_list="",
+                poll_id=None, poll_message_id=None, poll_options=None,poll_consensus_coefficient=None, poll_stop_date=None, poll_yes_list="", poll_no_list="",
                 change_ctype=None, change_mod_action=None, change_mod_modid=None, change_mod_workshopid=None, change_setting_variable=None, change_setting_old_value=None, change_setting_new_value=None,
                 proposer_first_name=None, proposer_last_name=None, proposer_username=None, proposer_id=None):
         self.reform_id = reform_id
@@ -551,7 +547,7 @@ class Reform:
         self.poll_message_id = poll_message_id
         self.poll_options = poll_options
         self.poll_consensus_coefficient = poll_consensus_coefficient
-        self.poll_active_time = poll_active_time
+        self.poll_stop_date = poll_stop_date
         self.poll_yes_list = poll_yes_list
         self.poll_no_list = poll_no_list
         self.change_ctype = change_ctype
@@ -588,7 +584,7 @@ def init_reform_table():
         poll_message_id INTEGER,
         poll_options INTEGER,
         poll_consensus_coefficient REAL,
-        poll_active_time INTEGER,
+        poll_stop_date INTEGER,
         poll_yes_list TEXT,
         poll_no_list TEXT,
         change_ctype TEXT,
@@ -752,12 +748,7 @@ def get_setting_clone_change(variable, new_value):
         import os
         conn = sqlite3.connect(reforms_db)
         c = conn.cursor()
-        c.execute('''
-            SELECT *
-            FROM reforms
-            WHERE change_setting_variable = ?  
-                AND change_setting_new_value = ?
-        ''', (variable, new_value, 1))
+        c.execute('SELECT * FROM reforms WHERE change_setting_variable = ? AND change_setting_new_value = ? AND reform_is_active = ?', (variable, new_value, 1))
         result = c.fetchone()
         conn.close()
         if result:
@@ -808,8 +799,7 @@ status_cmd='status'
 status_desc='Retrive the current status of '+SERVICE_NAME
 mod_cmd='mod'
 mod_desc='Allows to manage installed mods through vote'
-mod_msg_helper='''
-Please use:
+mod_msg_helper='''For '''+mod_cmd+''' please use:
         /'''+mod_cmd+''' list
         /'''+mod_cmd+''' install <Mod URL>
         /'''+mod_cmd+''' install <Mod ID> <Workshop ID>
@@ -818,13 +808,12 @@ Please use:
         /'''+mod_cmd+''' uninstall <Mod ID> <Workshop ID>'''
 setting_cmd='setting'
 setting_desc='Allows to manage server settings through vote'
-setting_msg_helper='''
-Please use:
-        /'''+setting_cmd+''' get <any parameter>
-        /'''+setting_cmd+''' set <any parameter>'''
+setting_msg_helper='''For '''+setting_cmd+''' please use:
+        /'''+setting_cmd+''' get <parameter>
+        /'''+setting_cmd+''' set <parameter> <value>'''
 help_cmd='help'
 help_desc='Provide the command legenda.'
-help_msg="List of the commands:\n/"+help_cmd+": "+help_desc+"\n/"+status_cmd+": "+status_desc+"\n/"+restart_cmd+": "+restart_desc+"\n/"+mod_cmd+": "+mod_msg_helper+"\n/"+setting_cmd+": "+setting_msg_helper
+help_msg="List of the commands:\n/"+help_cmd+": "+help_desc+"\n/"+status_cmd+": "+status_desc+"\n/"+restart_cmd+": "+restart_desc+"\n"+mod_msg_helper+"\n"+setting_msg_helper
 
 ### OTHER MESSAGES
 
@@ -946,8 +935,8 @@ def alert_bot(keyword, line):
         import re
         if keyword == log_key_start:
             server_chat_message(SERVICE_NAME.capitalize()+" is now online.")
-            if not changes_are_applied():
-                server_chat_message("Seems like some changes were not applied since last reboot. Check logs for more info.")
+            #if not changes_are_applied():
+            #    server_chat_message("Seems like some changes were not applied since last reboot. Check logs for more info.")
         elif keyword == log_key_stop:
             server_chat_message(SERVICE_NAME.capitalize()+" is going down...")
         elif command_flag and keyword == log_key_cmd:
@@ -1010,7 +999,7 @@ def create_poll(chat_id, description, options, anonymous=False, multiple_answers
 def stop_poll(reform=None, poll_id=None):
     if not reform:
         reform = get_reform_by_poll_id(poll_id)
-    reform.poll_active_time = reform.reform_date - unix_timestamp()
+    reform.poll_stop_date = unix_timestamp()
     save_reform(reform)
     return bot.stop_poll(reform.reform_chat_id, reform.poll_message_id)
 
@@ -1032,7 +1021,7 @@ def implement_change(reform=None, poll_id=None):
             uninstall_mod(reform.change_mod_modid, reform.change_mod_workshopid)
         logger(f"Type: {reform.change_ctype} Action: {reform.change_mod_action} ModID: {reform.change_mod_modid} WorkshopID: {reform.change_mod_workshopid} Date: {log_timestamp}", "INFO")
     elif reform.change_ctype == 'setting':
-        logger(f"Type: {reform.change_ctype} Variable: {reform.change_setting_variable} Old Value: {reform.change_setting_old_value} Current Value: {get_setting(change.variable).value} New Value: {reform.change_setting_new_value} Date: {log_timestamp}", "INFO")
+        logger(f"Type: {reform.change_ctype} Variable: {reform.change_setting_variable} Old Value: {reform.change_setting_old_value} Current Value: {get_setting(reform.change_setting_variable).value} New Value: {reform.change_setting_new_value} Date: {log_timestamp}", "INFO")
         set_setting_value(reform.change_setting_variable, reform.change_setting_new_value)
     reform.reform_is_active = 0
     reform.reform_implemented = 1
@@ -1044,10 +1033,9 @@ def consensus(reform=None, poll_id=None, votes_from = 'db', consensus = False, v
         if votes_from == 'db':
             if not reform:
                 reform = get_reform_by_poll_id(poll_id)
-        max_voters = bot.get_chat_members_count(reform.reform_chat_id)
+        max_voters = bot.get_chat_members_count(reform.reform_chat_id) - 1 # At least one bot (this one) is in the count, so we detract one.
         if reform.poll_options == 2:
-            consensus_threshold = max_voters // reform.poll_options + 1 # Majority threshold
-            consensus_threshold = max_voters // reform.poll_options # Test threshold - put yourself in a group with just you and the bot
+            consensus_threshold = max_voters // reform.poll_options + 1 # Majority threshold (for testing remove the +1 and be alone in a group with just the bot)
         if votes_from == 'db':
                 if reform.poll_yes_list:
                     yes_votes = len(reform.poll_yes_list.split(','))
@@ -1163,6 +1151,9 @@ def create_reform(message, ctype, change):
                 poll = mod_poll_launch(new_reform)
             elif ctype == 'setting':
                 variable, value = change
+                print(change)
+                print(variable)
+                print(value)
                 new_reform.change_setting_variable = variable
                 new_reform.change_setting_old_value = get_setting(variable).value
                 new_reform.change_setting_new_value = value
@@ -1192,8 +1183,6 @@ def create_reform(message, ctype, change):
                 def id(self):
                     return self.chat_id
             # Eat your broccoli, bitch
-            print(clone.reform_chat_id)
-            print(clone.poll_message_id)
             message = fakemessage(chat_id=clone.reform_chat_id, message_id=clone.poll_message_id)
             reply_to(message, "This change has been already proposed and is under trial process.")
     except Exception as e:
@@ -1264,9 +1253,9 @@ if __name__ == '__main__':
                     elif len(modid_list) == len(workshopid_list):
                         counter = 0
                         for modid in modid_list:
-                            for workshopid in workshopid_list:
-                                counter += 1
-                                reply_to(message, f"{counter}) {modid} [{workshopid}]\n\nhttps://steamcommunity.com/sharedfiles/filedetails/?id="+workshopid)
+                            counter += 1
+                            workshopid = workshopid_list[modid_list.index(modid)]
+                            reply_to(message, f"{counter}) {modid} [{workshopid}]\n\nhttps://steamcommunity.com/sharedfiles/filedetails/?id="+workshopid)
                         return True
                 else:
                     reply_to(message, mod_msg_helper)
@@ -1337,9 +1326,17 @@ if __name__ == '__main__':
             elif command[1] == "set":
                 if len(command) == 4:
                     if is_setting(command[2]):
-                        create_reform(f"{message.from_user.first_name} {message.from_user.last_name}", message.from_user.id, message.chat.id, message.id, 'setting', [command[2], command[3]])
+                        create_reform(message, 'setting', [command[2], command[3]])
                     else:
                         reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?")
+                elif is_setting(command[2]) and command[2] in ["ServerWelcomeMessage", "Map", "PublicName", "PublicDescription", "DiscordChannel"]: # Exception List
+                    import re
+                    match = re.match(r"/setting set (\w+) (.+)", message.text)
+                    if match:
+                        content = match.group(2)
+                        create_reform(message, 'setting', [command[2], content])
+                    else:
+                        reply_to(message, setting_msg_helper)
                 else:
                     reply_to(message, setting_msg_helper)
             else:
