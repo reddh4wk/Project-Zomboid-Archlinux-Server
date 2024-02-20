@@ -31,23 +31,25 @@
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     .#(   / .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
-# Please install pip on your system. Use your package maanger if you're using Linux or this if you're using Windows:
-# curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
-# python get-pip.py
-#
-#
-# python ./main.py (assuming you are positioned in the same folder of the .py file)
-#
-# Oh, also remember to get a telegram bot TOKEN from the botfather bot and replace the MAIN_TOKEN variable value with it.
+# Please install pip on your system, install the dependencies that will be throwing errors when you launch the program and create a separate python virtual environmment (very easy to do) to launch this software.
+# Oh, also remember to get a telegram bot TOKEN from the botfather bot and replace the TOKEN variable value with it. You will need to put the group chat id in SERVER_CHATS. To get your group chat id, add the bot to the group chat and use the command /id
 # Also make sure your bot is in your public group with admin priviledges and disable the privacy setting of your bot from botfather chat using /setprivacy command or whatever it is.
 # I think this should be it...
+
+# PZserver TG Module - Copyright (C) 2023 Damiano Meda
+# This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+# You should have received a copy of the GNU General Public License along with this program.  If not, see <https://www.gnu.org/licenses/>. Also add information on how to contact you by electronic and paper mail.
+# If the program does terminal interaction, make it output a short notice like this when it starts in an interactive mode:
+
+# PZserver TG Module - Copyright (C) 2023 Damiano Meda
+# This program comes with ABSOLUTELY NO WARRANTY; This is free software, and you are welcome to redistribute it under certain conditions. Contact me at damiano.meda@gmail.com for more info.
 
 ########################################
 ### FUNDAMENTAL CONSTANTS
 ########################################
 
-SERVER_CHATS=[] #Production
-#SERVER_CHATS=[-4167198763] #Test
+SERVER_CHATS=[]
 TOKEN=''
 SERVICE_NAME ='pzserver'
 
