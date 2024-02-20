@@ -46,9 +46,9 @@
 ### FUNDAMENTAL CONSTANTS
 ########################################
 
-SERVER_CHATS=[-1002033569385] #Production
+SERVER_CHATS=[] #Production
 #SERVER_CHATS=[-4167198763] #Test
-TOKEN='6353909839:AAEQRzoSX9pXCL0sCtRUiw0aWW4via9bgzU'
+TOKEN=''
 SERVICE_NAME ='pzserver'
 
 ########################################################################################################################
