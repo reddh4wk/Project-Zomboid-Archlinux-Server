@@ -63,7 +63,7 @@ The first time launch the server manually from the pzserver user using its own .
 ```
 I may have missed some steps since I'm writing based on my memory. Sorry. But all the big steps are here.
 
-### Set up the Telegram Bot
+# Set up the Telegram Bot
 
 Last but not least for sure comes the telegram bot, that took some time to write. I know professional python devs will complain about it being one big file and without comments. I know.
 
