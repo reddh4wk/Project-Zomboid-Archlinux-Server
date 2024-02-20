@@ -67,10 +67,10 @@ I may have missed some steps since I'm writing based on my memory. Sorry. But al
 
 Last but not least for sure comes the telegram bot, that took some time to write. I know professional python devs will complain about it being one big file and without comments. I know.
 
-Now, first of all create a API token with BotFather on Telegram and put it in the configuration in /opt/pzserver/telegram_bot/pzserver_tg.py, in the TOKEN variable.
-You will need to put the group chat id in SERVER_CHATS. To get your group chat id, add the bot to the group chat and, in that group chat, use the command /id 
-You may also need to disable the privacy setting of your bot from botfather chat using /setprivacy command
-Make sure to install all the dependencies through /opt/pzserver/python/bin/pip. You will see error thrown with the name of the dependencies when you launch it. If not, try launching it like this:
+- Now, first of all create a API token with BotFather on Telegram and put it in the configuration in /opt/pzserver/telegram_bot/pzserver_tg.py, in the TOKEN variable.
+- You will need to put the group chat id in SERVER_CHATS. To get your group chat id, add the bot to the group chat and, in that group chat, use the command /id 
+- You may also need to disable the privacy setting of your bot from botfather chat using /setprivacy command
+- Make sure to install all the dependencies through /opt/pzserver/python/bin/pip. You will see error thrown with the name of the dependencies when you launch it. If not, try launching it like this:
 
 ```
 pkill pzserver_tg.py && > /opt/pzserver/telegram_bot/pzserver_tg.log && /opt/pzserver/python/bin/python /opt/pzserver/telegram_bot/pzserver_tg.py & tail -f /opt/pzserver/telegram_bot/pzserver_tg.log
