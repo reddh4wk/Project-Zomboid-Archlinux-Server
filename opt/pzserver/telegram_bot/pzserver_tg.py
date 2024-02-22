@@ -54,7 +54,7 @@ if __name__ == '__main__':
     #SERVER_CHATS = [] #Test
     TOKEN = ''
     SERVICE_NAME = 'pzserver'
-    DEVS=['']
+    DEVS=[]
 
 ########################################################################################################################
 ### GET PATHS
@@ -1082,6 +1082,9 @@ https://help.steampowered.com/en/faqs/view/2816-BE67-5B69-0FEC'''
     msg_no_mods_installed = "There are no mods installed."
     msg_unhandled_exception = "Unhandled exception, check logs, call the police or contact the administrator."
     msg_workshopid_from_file_failed = "Getting the workshop ID from the config file failed. Check logs."
+    msg_only_master = "Only my master can use this. You have no power here."
+    msg_change_implemented = "This change has been implemented."
+    msg_change_rejected = "This change has been rejected."
     
 ### COMMANDS - RESTART DOUBLE CHECK - no database, just memory
 
@@ -1335,7 +1338,7 @@ def deny_change(reform=None, poll_id=None):
         reform.reform_implemented = 0
         save_reform(reform)
         #reform.print_all()
-        reply_to(fake_poll_message(reform), "This change has been rejected.")
+        reply_to(fake_poll_message(reform), msg_change_rejected)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1356,7 +1359,7 @@ def implement_change(reform=None, poll_id=None):
         reform.reform_implemented = 1
         save_reform(reform)
         #reform.print_all()
-        reply_to(fake_poll_message(reform), "This change has been implemented.")
+        reply_to(fake_poll_message(reform), msg_change_implemented)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1615,9 +1618,9 @@ if __name__ == '__main__':
                         counter += 1
                         workshopid = workshopid_list[modid_list.index(modid)]
                         reply_to(message, f"{counter}) {modid} [{workshopid}]\n\nhttps://steamcommunity.com/sharedfiles/filedetails/?id="+workshopid)
-            def install_uninstall_mod_cmd(message, action, valid_IDs, source):
-                if valid:
-                    modid, workshopid = valid
+            def install_uninstall_mod_cmd(message, action, valid_IDs, source, force=False):
+                if valid_IDs:
+                    modid, workshopid = valid_IDs
                     is_installed = mod_is_installed(modid, workshopid)
                     if action == 'install':
                         if not is_installed:
@@ -1625,6 +1628,7 @@ if __name__ == '__main__':
                                 create_reform(message, 'mod', [action, modid, workshopid])
                             else:
                                 install_mod(modid, workshopid)
+                                reply_to(message, msg_change_implemented)
                         elif is_installed:
                             reply_to(message, already_installed_msg)
                         else:
@@ -1635,6 +1639,7 @@ if __name__ == '__main__':
                                 create_reform(message, 'mod', [action, modid, workshopid])
                             else:
                                 uninstall_mod(modid, workshopid)
+                                reply_to(message, msg_change_implemented)
                         elif not is_installed:
                             reply_to(message, msg_mod_not_installed)
                         else:
@@ -1650,30 +1655,44 @@ if __name__ == '__main__':
                         reply_to(message,  msg_workshopid_from_file_failed)
                     else:
                         reply_to(message, msg_unhandled_exception)
-            def install_uninstall_mod_cmd_handler(message, force=False):
-                command = message.text.split()
+            def install_uninstall_mod_cmd_handler(message, command=None, force=False):
+                if not command:
+                    command = message.text.split()
                 if len(command) == 3:
                     if is_workshop_url(command[2]):
-                        install_uninstall_mod_cmd(message, command[1], strip_IDs_from_steam(command[2]), 'url')
-                    elif command[1] == 'uninstall':
-                        install_uninstall_mod_cmd(message, command[1], get_workshopid_from_installed_mods(command[2]), 'file')
+                        install_uninstall_mod_cmd(message, command[1], strip_IDs_from_steam(command[2]), 'url', force)
+                    elif command[1] == 'uninstall' and is_modid(command[2]):
+                        install_uninstall_mod_cmd(message, command[1], get_workshopid_from_installed_mods(command[2]), 'file', force)
                     else:
                         reply_to(message, mod_msg_helper)
                 elif len(command) == 4:
-                    install_uninstall_mod_cmd(message, command[1], sort_valid_modid_workshopid(command[2], command[3]), 'command')
+                    if not command[2] == 'force':
+                        install_uninstall_mod_cmd(message, command[1], sort_valid_modid_workshopid(command[2], command[3]), 'command', force)
+                    elif command[2] == 'force':
+                        if message.from_user.id in DEVS:
+                            command.pop(2)
+                            install_uninstall_mod_cmd_handler(message, command, force=True)
+                        else:
+                            reply_to(message, msg_only_master)
+                    else:
+                        reply_to(message, mod_msg_helper)
+                elif len(command) == 5:
+                    if command[2] == 'force':
+                        if message.from_user.id in DEVS:
+                            command.pop(2)
+                            install_uninstall_mod_cmd_handler(message, command, force=True)
+                        else:
+                            reply_to(message, msg_only_master)
+                    else:
+                        reply_to(message, mod_msg_helper)
                 else:
                     reply_to(message, mod_msg_helper)
             # Alright...
             command = message.text.split()
             if command[1] == 'list' and len(command) == 2:
                 list_mod_cmd()
-            elif command[1] in ['install', 'uninstall']:
-                if not command[2] == 'force':
-                    install_uninstall_mod_cmd_handler(message)
-                elif message.from_user.id in DEVS:
-                    install_uninstall_mod_cmd_handler(command, force=True)
-                else:
-                    reply_to(message, "Only my master can use this. You have no power here.")
+            elif command[1] in ['install', 'uninstall'] and len(command) in range(3,5):
+                install_uninstall_mod_cmd_handler(message)
             else:
                 reply_to(message, mod_msg_helper)
         # MODIFY PZSERVER SETTINGS
