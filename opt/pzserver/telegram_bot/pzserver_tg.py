@@ -51,7 +51,7 @@
 
 if __name__ == '__main__':
     SERVER_CHATS=[] #Production
-    #SERVER_CHATS = [] #Test
+    SERVER_CHATS = [] #Test
     TOKEN = ''
     SERVICE_NAME = 'pzserver'
     DEVS=[]
@@ -1095,9 +1095,9 @@ def save_restart(restart_cmd, user):
         global global_restart_requests
         for each in global_restart_requests:
             if each[1] == user:
-                each[0] = cmd
+                each[0] = restart_cmd
                 return
-        global_restart_requests.append((cmd, user))        
+        global_restart_requests.append((restart_cmd, user))        
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1105,7 +1105,7 @@ def check_restart(restart_cmd, user):
     try:
         global global_restart_requests
         for each in global_restart_requests:
-            if each[0] == cmd and each[1] == user:
+            if each[0] == restart_cmd and each[1] == user:
                 return True
         return False
     except Exception as e:
@@ -1178,7 +1178,7 @@ if __name__ == '__main__':
 
     log_key_client_re_pattern = r'ip=([\d.]+).*?steam-id=(\d+) access=(\w+) username="([^"]+)"'
 
-    log_key_start = 'Zomboid Server is VAC Secure'
+    log_key_start = '*** SERVER STARTED ****'
     log_key_stop = 'command entered via server console (System.in): "quit"'
     log_key_client_init=['[receive-packet] "client-connect"','steam-id','username']
     log_key_client_connecting=['[receive-packet] "login-queue-request"','steam-id','username']
@@ -1226,6 +1226,8 @@ def player_client_logout_event(steam_id, username, access, ip):
 
 def alert_bot(keyword, line):
     try:
+        print(keyword)
+        print(line)
         import re
         if keyword == log_key_start:
             server_chat_message(SERVICE_NAME.capitalize()+" is now online.")
@@ -1598,7 +1600,7 @@ if __name__ == '__main__':
             restart_required = check_restart(restart_cmd, message.from_user.id)
             if restart_required:
                 clear_restart(message.from_user.id)
-                run_command("sudo systemctl restart " + get_servicename())
+                run_command("sudo systemctl restart "+SERVICE_NAME)
         @bot.message_handler(commands=[restart_cancel_cmd])
         def cancel_restart_command(message):
             clear_restart(message.from_user.id)
@@ -1697,7 +1699,7 @@ if __name__ == '__main__':
                 reply_to(message, mod_msg_helper)
         # MODIFY PZSERVER SETTINGS
         @bot.message_handler(commands=[setting_cmd])
-        def setting_command(message):
+        def setting_command(message, force=False):
             command = message.text.split()
             if command[1] == "get":
                 if len(command) == 3:
@@ -1711,7 +1713,11 @@ if __name__ == '__main__':
             elif command[1] == "set":
                 if len(command) == 4:
                     if is_setting(command[2]):
-                        create_reform(message, 'setting', [command[2], command[3]])
+                        if not force:
+                            create_reform(message, 'setting', [command[2], command[3]])
+                        else:
+                            set_setting_value(command[2], command[3])
+                            reply_to(message, msg_change_implemented)
                     else:
                         reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?")
                 elif is_setting(command[2]) and command[2] in ["ServerWelcomeMessage", "Map", "PublicName", "PublicDescription", "DiscordChannel"]: # Exception List
@@ -1719,9 +1725,19 @@ if __name__ == '__main__':
                     match = re.match(r"/setting set (\w+) (.+)", message.text)
                     if match:
                         content = match.group(2)
-                        create_reform(message, 'setting', [command[2], content])
+                        if not force:
+                            create_reform(message, 'setting', [command[2], content])
+                        else:
+                            set_setting_value(command[2], content)
+                            reply_to(message, msg_change_implemented)
                     else:
                         reply_to(message, setting_msg_helper)
+                elif len(command) == 5 and command[2] == 'force':
+                    if message.from_user.id in DEVS:
+                        command.pop(2)
+                        setting_command(message, force=True)
+                    else:
+                        reply_to(message, msg_only_master)
                 else:
                     reply_to(message, setting_msg_helper)
             else:
