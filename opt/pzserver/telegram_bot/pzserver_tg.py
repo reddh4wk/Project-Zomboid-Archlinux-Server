@@ -1237,7 +1237,8 @@ def alert_bot(keyword, line):
             server_chat_message(SERVICE_NAME.capitalize()+" is going down...")
         elif command_flag and keyword == log_key_cmd:
             if '"quit"' not in line and '"save"' not in line:
-                server_chat_message("A"+line[44:])
+                index = line.find('command entered')
+                server_chat_message(line[index:].capitalize())
         elif join_flag and keyword == log_key_client_init:
             match = re.search(log_key_client_re_pattern, line)
             if match:
@@ -1259,23 +1260,17 @@ def alert_bot(keyword, line):
 
 def monitor_log(filename=PZSERVER_LOG, keywords=[log_key_start, log_key_stop, log_key_client_init, log_key_client_logout, log_key_cmd]):
     try:
-        import time
-        with open(filename, 'r') as f:
-            f.seek(0, 2)
-            while True:
-                current_position = f.tell()
-                line = f.readline()
-                if not line:
-                    time.sleep(0.1)
-                    f.seek(current_position)
-                else:
-                    for keyword in keywords: 
-                        if type(keyword)==str:
-                            if keyword in line:
-                                alert_bot(keyword, line)
-                        elif type(keyword)==list:
-                            if all(key_fragment in line for key_fragment in keyword):
-                                alert_bot(keyword, line)
+        import subprocess
+        tail_process = subprocess.Popen(['tail', '-f', filename], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for line in tail_process.stdout:
+            # Process each line as it is received
+            for keyword in keywords: 
+                if isinstance(keyword, str):
+                    if keyword in line:
+                        alert_bot(keyword, line)
+                elif isinstance(keyword, list):
+                    if all(key_fragment in line for key_fragment in keyword):
+                        alert_bot(keyword, line)
     except Exception as e:
         logger(e, "ERROR")
 
