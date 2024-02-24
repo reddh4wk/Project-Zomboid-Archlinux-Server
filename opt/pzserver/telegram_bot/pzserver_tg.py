@@ -50,11 +50,11 @@
 ########################################
 
 if __name__ == '__main__':
-    SERVER_CHATS=[] #Production
-    SERVER_CHATS = [] #Test
-    TOKEN = ''
+    SERVER_CHATS=[-1002033569385] #Production
+    #SERVER_CHATS = [-4167198763] #Test
+    TOKEN = '6353909839:AAEQRzoSX9pXCL0sCtRUiw0aWW4via9bgzU'
     SERVICE_NAME = 'pzserver'
-    DEVS=[]
+    DEVS=[45386832]
 
 ########################################################################################################################
 ### GET PATHS
@@ -1191,9 +1191,21 @@ if __name__ == '__main__':
 
 ### PARSING FUNCTIONS
 
+def multi_fucker_autentication(steam_id, username):
+    try:
+        if MFA:
+            for message, steam_id, verification, telegram_id in MFA:
+                if username == verification:
+                    registration = player_set_telegram_id(steam_id, telegram_id)
+                    reply_to(message, "Your game account has been successfully linked.")
+                    return True
+    except Exception as e:
+        logger(e, "ERROR")
+
 def player_client_login_event(steam_id, username, access, ip):
     try:
         global open_sessions
+        multi_fucker_autentication(steam_id, username)
         server_chat_message(f"A player connected to the server: {username}")
         upsert_player(steam_id, username, access)
         session = Session()
@@ -1559,23 +1571,18 @@ if __name__ == '__main__':
             else:
                 reply_to(message, stats_msg_helper, disable_web_page_preview=True)
         # REGISTER
+        MFA=[]
         @bot.message_handler(commands=[register_cmd])
         def register_command(message):
             command = message.text.split()
             if len(command) == 2:
                 steam_id = valid_steam_id(command[1])
                 if steam_id:
-                    if not message.from_user.id != player_is_registered(steam_id):
-                        if user_is_registered(message.from_user.id):
-                            reply_to(message, f"Your game account has been changed successfully.")
-                        else:
-                            registration = player_set_telegram_id(steam_id, message.from_user.id)
-                            if registration:
-                                reply_to(message, f"Your game account has been successfully linked.")
-                            elif registration == False:
-                                reply_to(message, f"The steam ID you provided wasn't found in the database. Did you login on the server at least once?")
+                    if get_player(steam_id):
+                        reply_to(message, f"Please connect to PZserver before next reboot with an account called 'MFA{message.from_user.id}' (Multi Fucker Authentication) to complete the process.")
+                        MFA.append([message, int(steam_id), 'MFA'+str(message.from_user.id), message.from_user.id])
                     else:
-                        reply_to(message, f"Another user already registed this steam ID.")
+                        reply_to(message, f"This steam ID is not associated to any player of the server yet.")
                 else:
                     reply_to(message, f"This is not a valid steam ID.")
             else:
