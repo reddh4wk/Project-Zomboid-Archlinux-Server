@@ -50,11 +50,12 @@
 ########################################
 
 if __name__ == '__main__':
-    SERVER_CHATS=[-1002033569385] #Production
-    #SERVER_CHATS = [-4167198763] #Test
-    TOKEN = '6353909839:AAEQRzoSX9pXCL0sCtRUiw0aWW4via9bgzU'
+    TEST_MODE = 0
+    SERVER_CHATS=[] #Production
+    DEBUG_CHAT = [] #Test
+    TOKEN = ''
     SERVICE_NAME = 'pzserver'
-    DEVS=[45386832]
+    DEVS=[]
 
 ########################################################################################################################
 ### GET PATHS
@@ -83,7 +84,7 @@ def logger(message, msg_type, log_file=log_file()):
     import traceback
     with open(log_file, 'a') as f:
         timestamp = log_timestamp()
-        f.write(timestamp+" ["+msg_type+"] "+str(message)+'\n')
+        f.write(timestamp+"["+msg_type+"] "+str(message)+'\n')
         traceback_str = traceback.format_exc()
         if msg_type == 'ERROR':
             if traceback_str:
@@ -214,18 +215,36 @@ def is_already_running(current_pid, current_script):
                 if current_script in line and 'python' in line:
                     pid = int(line.split()[1])
                     if pid != current_pid:
-                        return True
-        return False
+                        return True, pid
+        return False, None
+    except Exception as e:
+        logger(e, "ERROR")
+
+def stop_previous_instance(pid):
+    try:
+        import os
+        import signal
+        print(f"Stopping previous instance with PID: {pid}")
+        os.kill(pid, signal.SIGTERM)
     except Exception as e:
         logger(e, "ERROR")
 
 if __name__ == '__main__':
     try:
+        import sys
         pid, name = get_pid_and_name()
-        if is_already_running(pid, name):
-            print("Another instance of the script is already running.")
-            import sys
-            sys.exit(1)
+        restart_flag = '--restart' in sys.argv
+        already_running, running_pid = is_already_running(pid, name)
+        if already_running:
+            if restart_flag:
+                if running_pid:
+                    stop_previous_instance(running_pid)
+                else:
+                    print("Couldn't determine the PID of the previous instance.")
+                    sys.exit(1)
+            else:
+                print("Another instance of the script is already running.")
+                sys.exit(1)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -645,20 +664,12 @@ def init_reform_table():
         logger(e, "ERROR")
 
 class Player:
-    def __init__(self, steam_id, telegram_id, username, access, visit_count, last_seen, total_time, average_session, voted_yes, voted_no, proposed_change, got_change_accepted, got_change_rejected):
+    def __init__(self, steam_id, username, access, first_time_seen_on, telegram_id=None):
         self.steam_id = steam_id
         self.telegram_id = telegram_id
         self.username = username
         self.access = access
-        self.visit_count = visit_count
-        self.last_seen = last_seen
-        self.total_time = total_time
-        self.average_session = average_session
-        self.voted_yes = voted_yes
-        self.voted_no = voted_no
-        self.proposed_change = proposed_change
-        self.got_change_accepted = got_change_accepted
-        self.got_change_rejected = got_change_rejected
+        self.first_time_seen_on = first_time_seen_on
 
     def print_all(self):
         for var_name, var_value in vars(self).items():
@@ -681,12 +692,9 @@ def init_players_table():
         logger(e, "ERROR")
 
 class Session:
-    def __init__(self, session_id=None, steam_id=None, login=None, logout=None, ip=None):
+    def __init__(self, session_id=None, steam_id=None):
         self.session_id = session_id
         self.steam_id = steam_id
-        self.login = login
-        self.logout = logout
-        self.ip = ip
 
     def print_all(self):
         for var_name, var_value in vars(self).items():
@@ -746,10 +754,11 @@ def save_reform(reform):
 
 def get_player(steam_id):
     try:
+        print(int(steam_id))
         import sqlite3
         conn = sqlite3.connect(players_db)
         c = conn.cursor()
-        c.execute('SELECT * FROM players WHERE steam_id = ?', (steam_id,))
+        c.execute('SELECT * FROM players WHERE steam_id = ?', (int(steam_id),))
         result = c.fetchone()
         conn.close()
         if result:
@@ -764,7 +773,7 @@ def get_reform(reform_id):
         import sqlite3
         conn = sqlite3.connect(reforms_db)
         c = conn.cursor()
-        c.execute('SELECT * FROM reforms WHERE reform_id = ?', (reform_id,))
+        c.execute('SELECT * FROM reforms WHERE reform_id = ?', (int(reform_id),))
         result = c.fetchone()
         conn.close()
         if result:
@@ -779,7 +788,7 @@ def get_reform_by_poll_id(poll_id):
         import sqlite3
         conn = sqlite3.connect(reforms_db)
         c = conn.cursor()
-        c.execute('SELECT * FROM reforms WHERE poll_id = ?', (poll_id,))
+        c.execute('SELECT * FROM reforms WHERE poll_id = ?', (int(poll_id),))
         result = c.fetchone()
         conn.close()
         if result:
@@ -827,7 +836,7 @@ def player_set_telegram_id(steam_id, telegram_id):
         c.execute("SELECT * FROM players WHERE steam_id = ?", (steam_id,))
         existing_player = c.fetchone()
         if existing_player:
-            c.execute("UPDATE players SET telegram_id = ? WHERE steam_id = ?", (telegram_id, steam_id))
+            c.execute("UPDATE players SET telegram_id = ? WHERE steam_id = ?", (int(telegram_id), int(steam_id)))
             conn.commit()
             conn.close()
             return True
@@ -842,7 +851,7 @@ def player_get_telegram_id(steam_id):
         import sqlite3
         conn = sqlite3.connect(players_db)
         c = conn.cursor()
-        c.execute('SELECT telegram_id FROM players WHERE steam_id = ?', (steam_id,))
+        c.execute('SELECT telegram_id FROM players WHERE steam_id = ?', (int(steam_id),))
         result = c.fetchone()
         conn.close()
         if result:
@@ -869,19 +878,19 @@ def  player_is_registered(steam_id):
         import sqlite3
         conn = sqlite3.connect(players_db)
         c = conn.cursor()
-        c.execute("SELECT telegram_id FROM players WHERE steam_id=?", (steam_id,))
+        c.execute("SELECT telegram_id FROM players WHERE steam_id=?", (int(steam_id),))
         telegram_id = c.fetchone()
         conn.close()
         return telegram_id[0] if telegram_id else False
     except Exception as e:
         logger(e, "ERROR")
 
-def session_open(steam_id, login, ip):
+def session_open(steam_id, ip):
     try:
         import sqlite3
         conn = sqlite3.connect(sessions_db)
         c = conn.cursor()
-        c.execute("INSERT INTO sessions (steam_id, login, ip) VALUES (?, ?, ?)", (steam_id, login, ip))
+        c.execute("INSERT INTO sessions (steam_id, login, ip) VALUES (?, ?, ?)", (int(steam_id), unix_timestamp(), ip))
         session_id = c.lastrowid
         conn.commit()
         conn.close()
@@ -889,12 +898,12 @@ def session_open(steam_id, login, ip):
     except Exception as e:
         logger(e, "ERROR")
 
-def session_close(session_id, logout):
+def session_close(session_id):
     try:
         import sqlite3
         conn = sqlite3.connect(sessions_db)
         c = conn.cursor()
-        c.execute("UPDATE sessions SET logout = ? WHERE session_id = ?", (logout, session_id))
+        c.execute("UPDATE sessions SET logout = ? WHERE session_id = ?", (unix_timestamp(), int(session_id)))
         conn.commit()
         conn.close()
         return True
@@ -906,10 +915,10 @@ def upsert_player(steam_id, username, access):
         import sqlite3
         conn = sqlite3.connect(players_db)
         c = conn.cursor()
-        c.execute("SELECT * FROM players WHERE steam_id = ?", (steam_id,))
+        c.execute("SELECT * FROM players WHERE steam_id = ?", (int(steam_id),))
         existing_player = c.fetchone()
         if existing_player:
-            c.execute('SELECT usernames FROM players WHERE steam_id = ?', (steam_id,))
+            c.execute('SELECT usernames FROM players WHERE steam_id = ?', (int(steam_id),))
             usernames = c.fetchone()[0].split(',')
             if username not in usernames:
                 usernames.append(username)
@@ -1147,19 +1156,31 @@ if __name__ == '__main__':
 ########################################################################################################################
 
 def server_chat_message(text, disable_notification=True, disable_web_page_preview=False):
-    for each in SERVER_CHATS:
-        bot.send_message(each, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview)
+    try:
+        if not TEST_MODE:
+            for each in SERVER_CHATS:
+                bot.send_message(each, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview)
+        else:
+            bot.send_message(DEBUG_CHAT, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview)
+    except Exception as e:
+        logger(e, "ERROR")
 
 def reply_to(message, text, disable_notification=True, disable_web_page_preview=False):
-    bot.reply_to(message, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview)
+    try:
+        bot.reply_to(message, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview)
+    except Exception as e:
+        logger(e, "ERROR")
 
 def member_is_admin(message):
-    member = bot.get_chat_member(message.chat.id, message.from_user.id)
-    if member.status in ['creator','administrator']:
-        return True
-    else:
-        reply_to(message, "This command requires administrator-level or superior priviledges.", disable_notification=True)
-        return False
+    try:
+        member = bot.get_chat_member(message.chat.id, message.from_user.id)
+        if member.status in ['creator','administrator']:
+            return True
+        else:
+            reply_to(message, "This command requires administrator-level or superior priviledges.", disable_notification=True)
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
 
 ########################################################################################################################
 ### GAME RUNTIME LOG PARSING MANAGER
@@ -1176,7 +1197,7 @@ if __name__ == '__main__':
     join_flag = True
     left_flag = True
 
-    log_key_client_re_pattern = r'ip=([\d.]+).*?steam-id=(\d+) access=(\w+) username="([^"]+)"'
+    log_key_client_re_pattern = r'ip=([\d.]+)\s.*?steam-id=(\d+)\s.*?(?:access=(\w+)\s)?username="([^"]+)"'
 
     log_key_start = '*** SERVER STARTED ****'
     log_key_stop = 'command entered via server console (System.in): "quit"'
@@ -1191,55 +1212,66 @@ if __name__ == '__main__':
 
 ### PARSING FUNCTIONS
 
-def multi_fucker_autentication(steam_id, username):
+def remove_from_game_db(steamid, username):
+    import sqlite3
     try:
-        if MFA:
-            for message, steam_id, verification, telegram_id in MFA:
-                if username == verification:
-                    registration = player_set_telegram_id(steam_id, telegram_id)
-                    reply_to(message, "Your game account has been successfully linked.")
-                    return True
+        conn = sqlite3.connect('/opt/pzserver/Zomboid/Saves/Multiplayer/servertest/players.db')
+        c = conn.cursor()
+        c.execute("DELETE FROM networkPlayers WHERE steamid = ? AND username = ?", (steamid, username))
+        conn.commit()
+        conn.close()
     except Exception as e:
         logger(e, "ERROR")
 
-def player_client_login_event(steam_id, username, access, ip):
+def multi_fucker_autentication(steam_id, username):
+    try:
+        if MFA:
+            for entry in MFA:
+                message, steam_id, verification, telegram_id = entry
+                if username == verification:
+                    registration = player_set_telegram_id(steam_id, telegram_id)
+                    reply_to(message, "Your game account has been successfully linked.")
+                    remove_from_game_db(steam_id, username)
+                    MFA.pop(MFA.index(entry))
+                    return True
+        return False
+    except Exception as e:
+        logger(e, "ERROR")
+
+def player_client_login_event(steam_id, username, ip, access='user'):
     try:
         global open_sessions
-        multi_fucker_autentication(steam_id, username)
-        server_chat_message(f"A player connected to the server: {username}")
-        upsert_player(steam_id, username, access)
-        session = Session()
-        session.steam_id = steam_id
-        session.login = unix_timestamp()
-        session.ip = ip
-        session.id = session_open(steam_id, session.login, ip)
-        session.print_all
-        open_sessions.append(session)
+        mfa = multi_fucker_autentication(steam_id, username)
+        if not mfa:
+            server_chat_message(f"A player connected to the server: {username}")
+            upsert_player(steam_id, username, access)
+            session = Session()
+            session.steam_id = steam_id
+            session.id = session_open(steam_id, ip)
+            open_sessions.append(session)
     except Exception as e:
         logger(e, "ERROR")
         
-def player_client_logout_event(steam_id, username, access, ip):
+def player_client_logout_event(steam_id, username, ip, access='user'):
     try:
         global open_sessions
-        server_chat_message(f"A player disconnected from the server: {username}")
-        upsert_player(steam_id, username, access)
-        if open_sessions:
-            for session in open_sessions:
-                if session.steam_id == steam_id:
-                    session.logout = unix_timestamp()
-                    session_close(session.id, session.logout)
-                    open_sessions.pop(open_sessions.index(session))
-                    if ip != session.ip:
-                        logger(f"How can the logout IP ({ip}) of {username}[{steam_id}] be different from the login IP ({session.ip})", "WTF")
-        else:
-            logger("No open sessions, yet a player logged out.", "ERROR")
+        if not any(username == verification for message, steam_id, verification, telegram_id in MFA):
+            server_chat_message(f"A player disconnected from the server: {username}")
+            upsert_player(steam_id, username, access)
+            if open_sessions:
+                for session in open_sessions:
+                    if session.steam_id == steam_id:
+                        session_close(session.id)
+                        open_sessions.pop(open_sessions.index(session))
+            else:
+                logger("No open sessions, yet a player logged out.", "ERROR")
     except Exception as e:
         logger(e, "ERROR")
 
 def alert_bot(keyword, line):
     try:
-        print(keyword)
-        print(line)
+        #print(keyword)
+        #print(line)
         import re
         if keyword == log_key_start:
             server_chat_message(SERVICE_NAME.capitalize()+" is now online.")
@@ -1258,7 +1290,7 @@ def alert_bot(keyword, line):
                 steam_id = int(match.group(2))
                 access = match.group(3)
                 username = match.group(4)
-                player_client_login_event(steam_id, username, access, ip)
+                player_client_login_event(steam_id, username, ip)
         elif left_flag and keyword == log_key_client_logout:
             match = re.search(log_key_client_re_pattern, line)
             if match:
@@ -1266,7 +1298,7 @@ def alert_bot(keyword, line):
                 steam_id = int(match.group(2))
                 access = match.group(3)
                 username = match.group(4)
-                player_client_logout_event(steam_id, username, access, ip)
+                player_client_logout_event(steam_id, username, ip)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1457,14 +1489,19 @@ def active_clone_changes(ctype, change):
     except Exception as e:
         logger(e, "ERROR")
 
-def mod_poll_launch(new_reform):
+def mod_poll_launch(new_reform, workshop_url):
     try:
         poll = create_poll(new_reform.reform_chat_id, new_reform.reform_name, ['Yes','No'])
-        workshop_url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={new_reform.change_mod_workshopid}"
-        get_steam_image_url = strip_img_url_from_steam(workshop_url) 
         reply_to(poll, workshop_url)
-        bot.send_photo(new_reform.reform_chat_id, get_steam_image_url)
         return poll
+    except Exception as e:
+        logger(e, "ERROR")
+
+def mod_poll_img(new_reform, workshop_url):
+    try:
+        get_steam_image_url = strip_img_url_from_steam(workshop_url) 
+        bot.send_photo(new_reform.reform_chat_id, get_steam_image_url)
+        return True
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1493,11 +1530,13 @@ def create_reform(message, ctype, change):
             new_reform.change_ctype = ctype
             if ctype == 'mod':
                 action, modid, workshopid = change
+                workshop_url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={workshopid}"
                 new_reform.change_mod_action = action
                 new_reform.change_mod_modid = modid
                 new_reform.change_mod_workshopid = workshopid
                 new_reform.reform_name = f"Do you want to {action} {modid}?"
-                poll = mod_poll_launch(new_reform)
+                poll = mod_poll_launch(new_reform, workshop_url)
+                poll_img = mod_poll_img(new_reform, workshop_url)
             elif ctype == 'setting':
                 variable, value = change
                 print(change)
@@ -1508,6 +1547,7 @@ def create_reform(message, ctype, change):
                 new_reform.change_setting_new_value = value
                 new_reform.reform_name = f"Set {variable} = {value}"
                 poll = setting_poll_launch(new_reform)
+            print("POLLY: "+str(poll))
             new_reform.poll_id = poll.poll.id
             new_reform.poll_message_id = poll.message_id
             new_reform.poll_options = len(poll.poll.options)
@@ -1579,7 +1619,7 @@ if __name__ == '__main__':
                 steam_id = valid_steam_id(command[1])
                 if steam_id:
                     if get_player(steam_id):
-                        reply_to(message, f"Please connect to PZserver before next reboot with an account called 'MFA{message.from_user.id}' (Multi Fucker Authentication) to complete the process.")
+                        reply_to(message, f"Please connect to PZserver before next reboot with an account called 'MFA{message.from_user.id}' to complete the process.")
                         MFA.append([message, int(steam_id), 'MFA'+str(message.from_user.id), message.from_user.id])
                     else:
                         reply_to(message, f"This steam ID is not associated to any player of the server yet.")
@@ -1626,6 +1666,7 @@ if __name__ == '__main__':
                 if valid_IDs:
                     modid, workshopid = valid_IDs
                     is_installed = mod_is_installed(modid, workshopid)
+                    print(f"action {action} modid {modid} workshopid {workshopid} source {source} force {force}")
                     if action == 'install':
                         if not is_installed:
                             if not force:
@@ -1670,33 +1711,19 @@ if __name__ == '__main__':
                     else:
                         reply_to(message, mod_msg_helper)
                 elif len(command) == 4:
-                    if not command[2] == 'force':
-                        install_uninstall_mod_cmd(message, command[1], sort_valid_modid_workshopid(command[2], command[3]), 'command', force)
-                    elif command[2] == 'force':
-                        if message.from_user.id in DEVS:
-                            command.pop(2)
-                            install_uninstall_mod_cmd_handler(message, command, force=True)
-                        else:
-                            reply_to(message, msg_only_master)
-                    else:
-                        reply_to(message, mod_msg_helper)
-                elif len(command) == 5:
-                    if command[2] == 'force':
-                        if message.from_user.id in DEVS:
-                            command.pop(2)
-                            install_uninstall_mod_cmd_handler(message, command, force=True)
-                        else:
-                            reply_to(message, msg_only_master)
-                    else:
-                        reply_to(message, mod_msg_helper)
-                else:
-                    reply_to(message, mod_msg_helper)
+                    install_uninstall_mod_cmd(message, command[1], sort_valid_modid_workshopid(command[2], command[3]), 'command', force)
             # Alright...
             command = message.text.split()
             if command[1] == 'list' and len(command) == 2:
                 list_mod_cmd()
-            elif command[1] in ['install', 'uninstall'] and len(command) in range(3,5):
+            elif command[1] in ['install', 'uninstall'] and len(command) in range(2,5):
                 install_uninstall_mod_cmd_handler(message)
+            elif command[1] == 'force' and len(command) in range(3,6):
+                if message.from_user.id in DEVS:
+                    command.pop(1)
+                    install_uninstall_mod_cmd_handler(message, command, force=True)
+                else:
+                    reply_to(message, msg_only_master)
             else:
                 reply_to(message, mod_msg_helper)
         # MODIFY PZSERVER SETTINGS
