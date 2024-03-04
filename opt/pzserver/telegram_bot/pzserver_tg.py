@@ -53,9 +53,9 @@ if __name__ == '__main__':
     TEST_MODE = 0
     SERVER_CHATS=[] #Production
     DEBUG_CHAT = [] #Test
-    TOKEN = ''
+    TOKEN = '' # Telegram Bot API TOKEN
     SERVICE_NAME = 'pzserver'
-    DEVS=[]
+    DEVS=[] #Your telegram ID. It will allow you to force changes.
 
 ########################################################################################################################
 ### GET PATHS
@@ -106,21 +106,37 @@ def log_emendazio(max_rows=1000, buffer=300, log_file=log_file()):
 ### USEFUL TOOLS
 ########################################################################################################################
 
+def string_is_integer(s):
+    try:
+        int(s)
+        return True
+    except Exception as e:
+        logger(e, "ERROR")
+
 def timestamp():
-    from datetime import datetime
-    return datetime.now()
+    try:
+        from datetime import datetime
+        return datetime.now()
+    except Exception as e:
+        logger(e, "ERROR")
 
 def unix_timestamp():
-    import time
-    return int(time.time())
+    try:
+        import time
+        return int(time.time())
+    except Exception as e:
+        logger(e, "ERROR")
 
 def unix_timestamp_to_log_timestamp(unix_timestamp):
-    from datetime import datetime
-    return datetime.utcfromtimestamp(unix_timestamp).strftime('[%Y-%m-%d %H:%M:%S]')
-    
-def run_command(command):
-    import subprocess
     try:
+        from datetime import datetime
+        return datetime.utcfromtimestamp(unix_timestamp).strftime('[%Y-%m-%d %H:%M:%S]')
+    except Exception as e:
+        logger(e, "ERROR")
+
+def run_command(command):
+    try:
+        import subprocess
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         output, error = process.communicate()
         if process.returncode != 0:
@@ -131,8 +147,8 @@ def run_command(command):
         logger(e, "ERROR")
 
 def check_service_status(service_name=SERVICE_NAME):
-    import subprocess
     try:
+        import subprocess
         if 'Active: active (running)' in run_command('systemctl status '+SERVICE_NAME).split('\n')[2]:
             return True
         else:
@@ -754,7 +770,6 @@ def save_reform(reform):
 
 def get_player(steam_id):
     try:
-        print(int(steam_id))
         import sqlite3
         conn = sqlite3.connect(players_db)
         c = conn.cursor()
@@ -1129,7 +1144,6 @@ def clear_restart(user):
                 temp.remove(each)
                 removed = True
         global_restart_requests = temp
-        print(global_restart_requests)
         if removed:
             return True
         else:
@@ -1159,15 +1173,15 @@ def server_chat_message(text, disable_notification=True, disable_web_page_previe
     try:
         if not TEST_MODE:
             for each in SERVER_CHATS:
-                bot.send_message(each, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview)
+                bot.send_message(each, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode = 'HTML')
         else:
-            bot.send_message(DEBUG_CHAT, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview)
+            bot.send_message(DEBUG_CHAT[0], text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode = 'HTML')
     except Exception as e:
         logger(e, "ERROR")
 
 def reply_to(message, text, disable_notification=True, disable_web_page_preview=False):
     try:
-        bot.reply_to(message, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview)
+        bot.reply_to(message, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode = 'HTML')
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1539,15 +1553,11 @@ def create_reform(message, ctype, change):
                 poll_img = mod_poll_img(new_reform, workshop_url)
             elif ctype == 'setting':
                 variable, value = change
-                print(change)
-                print(variable)
-                print(value)
                 new_reform.change_setting_variable = variable
                 new_reform.change_setting_old_value = get_setting(variable).value
                 new_reform.change_setting_new_value = value
                 new_reform.reform_name = f"Set {variable} = {value}"
                 poll = setting_poll_launch(new_reform)
-            print("POLLY: "+str(poll))
             new_reform.poll_id = poll.poll.id
             new_reform.poll_message_id = poll.message_id
             new_reform.poll_options = len(poll.poll.options)
@@ -1652,21 +1662,37 @@ if __name__ == '__main__':
             def list_mod_cmd():
                 modid_list, workshopid_list = get_valid_modid_workshopid_list()
                 if not len(modid_list) and not len(workshopid_list):
-                    reply_to(message, "There are no mods installed.")
+                    reply_to(message, msg_no_mods_installed)
                 elif not len(modid_list) or not len(workshopid_list):
                     reply_to(message, msg_no_mods_installed)
                     logger("Something must be wrong with the mod lists... Please check the config file.", "WARNING")
                 elif len(modid_list) == len(workshopid_list):
                     counter = 0
+                    msg_body = ""
                     for modid in modid_list:
                         counter += 1
                         workshopid = workshopid_list[modid_list.index(modid)]
-                        reply_to(message, f"{counter}) {modid} [{workshopid}]\n\nhttps://steamcommunity.com/sharedfiles/filedetails/?id="+workshopid)
+                        msg_body += f"{counter}) <a href='https://steamcommunity.com/sharedfiles/filedetails/?id={workshopid}'>{modid}</a> [{workshopid}]\n"
+                    reply_to(message, msg_body)
+            def move_mod(from_, to_):
+                modid_list, workshopid_list = get_valid_modid_workshopid_list()
+                mods_count = len(modid_list)
+                if mods_count == len(workshopid_list) and mods_count > 0:
+                    if 0 < from_ <= mods_count and 0 < to_ <= mods_count and from_ != to_:
+                        modid_list.insert(to_-1, modid_list.pop(from_-1))
+                        workshopid_list.insert(to_-1, workshopid_list.pop(from_-1))
+                        modid_list_text = ';'.join(map(str, modid_list))
+                        workshopid_list_text = ';'.join(map(str, workshopid_list))
+                        set_setting_value('Mods', modid_list_text)
+                        set_setting_value('WorkshopItems', workshopid_list_text)
+                        reply_to(message, msg_change_implemented)
+                else:
+                    reply_to(message, msg_no_mods_installed)
+                    logger("Something must be wrong with the mod lists... Please check the config file.", "WARNING")
             def install_uninstall_mod_cmd(message, action, valid_IDs, source, force=False):
                 if valid_IDs:
                     modid, workshopid = valid_IDs
                     is_installed = mod_is_installed(modid, workshopid)
-                    print(f"action {action} modid {modid} workshopid {workshopid} source {source} force {force}")
                     if action == 'install':
                         if not is_installed:
                             if not force:
@@ -1718,6 +1744,8 @@ if __name__ == '__main__':
                 list_mod_cmd()
             elif command[1] in ['install', 'uninstall'] and len(command) in range(2,5):
                 install_uninstall_mod_cmd_handler(message)
+            elif command[1] == 'move' and len(command) == 4 and string_is_integer(command[2]) and string_is_integer(command[3]):
+                move_mod(int(command[2]), int(command[3]))
             elif command[1] == 'force' and len(command) in range(3,6):
                 if message.from_user.id in DEVS:
                     command.pop(1)
