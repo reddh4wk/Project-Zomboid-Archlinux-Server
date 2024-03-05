@@ -1169,19 +1169,19 @@ if __name__ == '__main__':
 ### BOT RELATED USEFUL TOOLS
 ########################################################################################################################
 
-def server_chat_message(text, disable_notification=True, disable_web_page_preview=False):
+def server_chat_message(text, disable_notification=True, disable_web_page_preview=False, parse_mode='Markdown'):
     try:
         if not TEST_MODE:
             for each in SERVER_CHATS:
-                bot.send_message(each, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode = 'HTML')
+                bot.send_message(each, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
         else:
-            bot.send_message(DEBUG_CHAT[0], text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode = 'HTML')
+            bot.send_message(DEBUG_CHAT[0], text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
     except Exception as e:
         logger(e, "ERROR")
 
-def reply_to(message, text, disable_notification=True, disable_web_page_preview=False):
+def reply_to(message, text, disable_notification=True, disable_web_page_preview=False, parse_mode='Markdown'):
     try:
-        bot.reply_to(message, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode = 'HTML')
+        bot.reply_to(message, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1459,7 +1459,6 @@ def consensus(reform=None, poll_id=None, votes_from = 'db', consensus = False, v
 def update_poll_vote(voter, poll_id, votes):
     try:
         reform = get_reform_by_poll_id(poll_id)
-        #reform.print_all()
         if reform.poll_options == 2:
             yes_option_n = 0
             no_option_n = 1
@@ -1472,13 +1471,17 @@ def update_poll_vote(voter, poll_id, votes):
                     if reform.poll_yes_list == "":
                         reform.poll_yes_list = voter
                     else:
-                        reform.poll_yes_list = ','.join(map(str, ensure_max_occurrences(reform.poll_yes_list.split(',').append(voter), voter, 1)))
+                        yes_array = reform.poll_yes_list.split(',')
+                        yes_array.append(voter)
+                        reform.poll_yes_list = ','.join(map(str, ensure_max_occurrences(yes_array, voter, 1)))
                 elif votes[0] == no_option_n:
                     is_no_list = True
                     if reform.poll_no_list == "":
                         reform.poll_no_list = voter
                     else:
-                        reform.poll_no_list = ','.join(map(str, ensure_max_occurrences(reform.poll_no_list.split(',').append(voter), voter, 1)))
+                        no_array = reform.poll_no_list.split(',')
+                        no_array.append(voter)
+                        reform.poll_no_list = ','.join(map(str, ensure_max_occurrences(no_array, voter, 1)))
             else: # retract_vote_option
                 if reform.poll_yes_list:
                     vote_list = reform.poll_yes_list.split(',')
@@ -1486,7 +1489,9 @@ def update_poll_vote(voter, poll_id, votes):
                 if reform.poll_no_list:
                     vote_list = reform.poll_no_list.split(',')
                     reform.poll_no_list = ','.join(map(str, ensure_max_occurrences(vote_list, voter, 0)))
+            #print("--------------------------------------------------------------")
             #reform.print_all()
+            #print("--------------------------------------------------------------")
             save_reform(reform)
             consensus(reform)
     except Exception as e:
@@ -1673,7 +1678,7 @@ if __name__ == '__main__':
                         counter += 1
                         workshopid = workshopid_list[modid_list.index(modid)]
                         msg_body += f"{counter}) <a href='https://steamcommunity.com/sharedfiles/filedetails/?id={workshopid}'>{modid}</a> [{workshopid}]\n"
-                    reply_to(message, msg_body)
+                    reply_to(message, msg_body, disable_web_page_preview=True, parse_mode='HTML')
             def move_mod(from_, to_):
                 modid_list, workshopid_list = get_valid_modid_workshopid_list()
                 mods_count = len(modid_list)
@@ -1685,11 +1690,11 @@ if __name__ == '__main__':
                         workshopid_list_text = ';'.join(map(str, workshopid_list))
                         set_setting_value('Mods', modid_list_text)
                         set_setting_value('WorkshopItems', workshopid_list_text)
-                        reply_to(message, msg_change_implemented)
+                        list_mod_cmd()
                 else:
                     reply_to(message, msg_no_mods_installed)
                     logger("Something must be wrong with the mod lists... Please check the config file.", "WARNING")
-            def install_uninstall_mod_cmd(message, action, valid_IDs, source, force=False):
+            def install_uninstall_mod_cmd(action, valid_IDs, source, force=False):
                 if valid_IDs:
                     modid, workshopid = valid_IDs
                     is_installed = mod_is_installed(modid, workshopid)
@@ -1726,30 +1731,30 @@ if __name__ == '__main__':
                         reply_to(message,  msg_workshopid_from_file_failed)
                     else:
                         reply_to(message, msg_unhandled_exception)
-            def install_uninstall_mod_cmd_handler(message, command=None, force=False):
+            def install_uninstall_mod_cmd_handler(command=None, force=False):
                 if not command:
                     command = message.text.split()
                 if len(command) == 3:
                     if is_workshop_url(command[2]):
-                        install_uninstall_mod_cmd(message, command[1], strip_IDs_from_steam(command[2]), 'url', force)
+                        install_uninstall_mod_cmd(command[1], strip_IDs_from_steam(command[2]), 'url', force)
                     elif command[1] == 'uninstall' and is_modid(command[2]):
-                        install_uninstall_mod_cmd(message, command[1], get_workshopid_from_installed_mods(command[2]), 'file', force)
+                        install_uninstall_mod_cmd(command[1], get_workshopid_from_installed_mods(command[2]), 'file', force)
                     else:
                         reply_to(message, mod_msg_helper)
                 elif len(command) == 4:
-                    install_uninstall_mod_cmd(message, command[1], sort_valid_modid_workshopid(command[2], command[3]), 'command', force)
+                    install_uninstall_mod_cmd(command[1], sort_valid_modid_workshopid(command[2], command[3]), 'command', force)
             # Alright...
             command = message.text.split()
             if command[1] == 'list' and len(command) == 2:
                 list_mod_cmd()
             elif command[1] in ['install', 'uninstall'] and len(command) in range(2,5):
-                install_uninstall_mod_cmd_handler(message)
+                install_uninstall_mod_cmd_handler()
             elif command[1] == 'move' and len(command) == 4 and string_is_integer(command[2]) and string_is_integer(command[3]):
                 move_mod(int(command[2]), int(command[3]))
             elif command[1] == 'force' and len(command) in range(3,6):
                 if message.from_user.id in DEVS:
                     command.pop(1)
-                    install_uninstall_mod_cmd_handler(message, command, force=True)
+                    install_uninstall_mod_cmd_handler(command, force=True)
                 else:
                     reply_to(message, msg_only_master)
             else:
