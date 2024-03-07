@@ -73,8 +73,13 @@ Last but not least for sure comes the telegram bot, that took some time to write
 - Make sure to install all the dependencies through /opt/pzserver/python/bin/pip. You will see error thrown with the name of the dependencies when you launch it. If not, try launching it like this:
 
 ```
-> /opt/pzserver/telegram_bot/pzserver_tg.log && /opt/pzserver/python/bin/python /opt/pzserver/telegram_bot/pzserver_tg.py --restart >> /opt/pzserver/telegram_bot/pzserver_tg.log && tail -f /opt/pzserver/telegram_bot/pzserver_tg.log
+> /opt/pzserver/telegram_bot/pzserver_tg.log && /opt/pzserver/python/bin/python /opt/pzserver/telegram_bot/pzserver_tg.py --restart
 ```
+And keep an eye on:
+```
+tail -f /opt/pzserver/telegram_bot/pzserver_tg.log
+```
+
 I think this should be it... :D
 
 # Conversion from sandbox preset to server settings
