@@ -2,7 +2,7 @@
 
 Looking for a graceful shutdown and a way to check easily logs and the shell running your application server? You're in the right place!
 Would you like a voting system to vote with your friends for the mods to install and the settings to change on the server? You're in the right place!
-These amd other features are present in this project.
+These and other features are present in this project.
 
 These files I prepared can run on any distribution that uses systemd as service manager. This set up lets you gracefully shut down the server without having to worry about the progresses not being saved. Just send the kill signal to your machine and let the service manager take care of the rest with the help of the script. Additionally, you can also log in on the server and use the --see option to be able to peak at what's happening on the server and interact with the application.
 
