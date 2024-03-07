@@ -49,6 +49,8 @@
 ### FUNDAMENTAL CONSTANTS
 ########################################
 
+import os
+
 if __name__ == '__main__':
     TEST_MODE = 0
     SERVER_CHATS=[] #Production
@@ -62,7 +64,6 @@ if __name__ == '__main__':
 ########################################################################################################################
 
 if __name__ == '__main__':
-    import os
     FILENAME = os.path.basename(__file__)
     BASENAME = os.path.splitext(FILENAME)[0]
     FOLDER = os.path.abspath(os.path.dirname(__file__))
@@ -300,12 +301,14 @@ def process_sandbox_vars(line):
 if __name__ == '__main__':
     SERVERINI = ["servertest.ini", "/opt/pzserver/Zomboid/Server/servertest.ini", process_serverini]
     SANDBOXVARS = ["servertest_SandboxVars.lua", "/opt/pzserver/Zomboid/Server/servertest_SandboxVars.lua", process_sandbox_vars]
+    VANILLA_SERVERINI = ["servertest.ini", "/opt/pzserver/Zomboid/Server/vanilla.ini", process_serverini]
+    VANILLA_SANDBOXVARS = ["servertest_SandboxVars.lua", "/opt/pzserver/Zomboid/Server/vanilla_SandboxVars.lua", process_sandbox_vars]
+    DEFAULT_SERVERINI = ["servertest.ini", "/opt/pzserver/Zomboid/Server/default.ini", process_serverini]
+    DEFAULT_SANDBOXVARS = ["servertest_SandboxVars.lua", "/opt/pzserver/Zomboid/Server/default_SandboxVars.lua", process_sandbox_vars]
 
-def get_settings():
+def get_settings(serverini, sandboxvars):
     try:
-        global SERVERINI
-        global SANDBOXVARS
-        setting_files = [SERVERINI, SANDBOXVARS]
+        setting_files = [serverini, sandboxvars]
         class Variable:
             def __init__(self, value, description, file_path, line_number):
                 self.value = value
@@ -336,7 +339,21 @@ def get_settings():
         logger(e, "ERROR")
 
 if __name__ == '__main__':
-    global_settings = get_settings()
+    global_settings = get_settings(SERVERINI, SANDBOXVARS)
+    if os.path.exists(VANILLA_SERVERINI[1]) and os.path.exists(VANILLA_SANDBOXVARS[1]):
+        vanilla_settings = get_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS)
+    else:
+        vanilla_settings = False
+        vanilla_settings_not_found_msg = f"Vanilla settings not found at {VANILLA_SERVERINI[1]} and {VANILLA_SANDBOXVARS[1]}. Please put vanilla settings here to fix this error."
+        print(vanilla_settings_not_found_msg)
+        logger(vanilla_settings_not_found_msg, "ERROR")
+    if os.path.exists(DEFAULT_SERVERINI[1]) and os.path.exists(DEFAULT_SANDBOXVARS[1]):
+        default_settings = get_settings(DEFAULT_SERVERINI, DEFAULT_SANDBOXVARS)
+    else:
+        if vanilla_settings:
+            default_settings = vanilla_settings
+        else:
+            default_settings = global_settings
 
 ########################################
 ### SETTINGS MANAGERS
@@ -345,7 +362,7 @@ if __name__ == '__main__':
 def reload_settings():
     try:
         global global_settings
-        global_settings = get_settings()
+        global_settings = get_settings(SERVERINI, SANDBOXVARS)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1061,8 +1078,8 @@ if __name__ == '__main__':
     status_cmd='status'
     status_desc='Retrive the current status of '+SERVICE_NAME
     restart_cmd='restart'
-    restart_confirm_cmd='confirm_restart'
-    restart_cancel_cmd='cancel_restart'
+    restart_confirm_cmd='confirm'
+    restart_cancel_cmd='cancel'
     restart_desc='Restart the application'
     restart_msg="Are you really sure you want to restart the server? All users will be disconnected.\n\nPlease press: /"+restart_confirm_cmd+" to proceed.\n\nOr press: /"+restart_cancel_cmd+" to cancel."
     stats_cmd='stats'
@@ -1210,19 +1227,22 @@ if __name__ == '__main__':
     command_flag = True
     join_flag = True
     left_flag = True
+    mod_fail_flag = True
 
     log_key_client_re_pattern = r'ip=([\d.]+)\s.*?steam-id=(\d+)\s.*?(?:access=(\w+)\s)?username="([^"]+)"'
+    mod_fail_re_pattern = r'required mod "(.*?)" not found'
 
     log_key_start = '*** SERVER STARTED ****'
     log_key_stop = 'command entered via server console (System.in): "quit"'
-    log_key_client_init=['[receive-packet] "client-connect"','steam-id','username']
-    log_key_client_connecting=['[receive-packet] "login-queue-request"','steam-id','username']
-    log_key_client_connected=['[receive-packet] "login-queue-done"','steam-id','username']
-    log_key_player_connected=['receive-packet] "player-connect"','steam-id','username']
-    log_key_player_in_game=['[fully-connected]','steam-id','username']
+    log_key_client_init = ['[receive-packet] "client-connect"','steam-id','username']
+    log_key_client_connecting = ['[receive-packet] "login-queue-request"','steam-id','username']
+    log_key_client_connected = ['[receive-packet] "login-queue-done"','steam-id','username']
+    log_key_player_connected = ['receive-packet] "player-connect"','steam-id','username']
+    log_key_player_in_game = ['[fully-connected]','steam-id','username']
     log_key_client_logout = ['[disconnect]','steam-id','username']
     log_key_cmd = 'command entered'
-    log_key_death='replacing dead player'
+    log_key_death = 'replacing dead player'
+    log_key_mod_fail = ['ZomboidFileSystem.loadModAndRequired','not found']
 
 ### PARSING FUNCTIONS
 
@@ -1288,11 +1308,14 @@ def alert_bot(keyword, line):
         #print(line)
         import re
         if keyword == log_key_start:
-            server_chat_message(SERVICE_NAME.capitalize()+" is now online.")
+            server_chat_message(SERVICE_NAME.capitalize()+" is now online")
             #if not changes_are_applied():
             #    server_chat_message("Seems like some changes were not applied since last reboot. Check logs for more info.")
         elif keyword == log_key_stop:
             server_chat_message(SERVICE_NAME.capitalize()+" is going down...")
+        elif mod_fail_flag and keyword == log_key_mod_fail:
+            match = re.search(mod_fail_re_pattern, line)
+            server_chat_message(f"Mod \"{match.group(1)}\" failed to load while starting the server")
         elif command_flag and keyword == log_key_cmd:
             if '"quit"' not in line and '"save"' not in line:
                 index = line.find('command entered')
@@ -1316,7 +1339,7 @@ def alert_bot(keyword, line):
     except Exception as e:
         logger(e, "ERROR")
 
-def monitor_log(filename=PZSERVER_LOG, keywords=[log_key_start, log_key_stop, log_key_client_init, log_key_client_logout, log_key_cmd]):
+def monitor_log(filename=PZSERVER_LOG, keywords=[log_key_start, log_key_stop, log_key_client_init, log_key_client_logout, log_key_cmd, log_key_mod_fail]):
     try:
         import subprocess
         tail_process = subprocess.Popen(['tail', '-f', filename], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -1738,51 +1761,37 @@ if __name__ == '__main__':
                     if is_workshop_url(command[2]):
                         install_uninstall_mod_cmd(command[1], strip_IDs_from_steam(command[2]), 'url', force)
                     elif command[1] == 'uninstall' and is_modid(command[2]):
-                        install_uninstall_mod_cmd(command[1], get_workshopid_from_installed_mods(command[2]), 'file', force)
+                        install_uninstall_mod_cmd(command[1], sort_valid_modid_workshopid(command[2], get_workshopid_from_installed_mods(command[2])), 'file', force)
                     else:
                         reply_to(message, mod_msg_helper)
                 elif len(command) == 4:
                     install_uninstall_mod_cmd(command[1], sort_valid_modid_workshopid(command[2], command[3]), 'command', force)
             # Alright...
             command = message.text.split()
-            if command[1] == 'list' and len(command) == 2:
-                list_mod_cmd()
-            elif command[1] in ['install', 'uninstall'] and len(command) in range(2,5):
-                install_uninstall_mod_cmd_handler()
-            elif command[1] == 'move' and len(command) == 4 and string_is_integer(command[2]) and string_is_integer(command[3]):
-                move_mod(int(command[2]), int(command[3]))
-            elif command[1] == 'force' and len(command) in range(3,6):
-                if message.from_user.id in DEVS:
-                    command.pop(1)
-                    install_uninstall_mod_cmd_handler(command, force=True)
+            if len(command) in range(2,6):
+                if command[1] == 'list' and len(command) == 2:
+                    list_mod_cmd()
+                elif command[1] in ['install', 'uninstall'] and len(command) in range(2,5):
+                    install_uninstall_mod_cmd_handler()
+                elif command[1] == 'move' and len(command) == 4 and string_is_integer(command[2]) and string_is_integer(command[3]):
+                    move_mod(int(command[2]), int(command[3]))
+                elif command[1] == 'force' and len(command) in range(3,6):
+                    if message.from_user.id in DEVS:
+                        command.pop(1)
+                        install_uninstall_mod_cmd_handler(command, force=True)
+                    else:
+                        reply_to(message, msg_only_master)
                 else:
-                    reply_to(message, msg_only_master)
+                    reply_to(message, mod_msg_helper)
             else:
                 reply_to(message, mod_msg_helper)
         # MODIFY PZSERVER SETTINGS
         @bot.message_handler(commands=[setting_cmd])
         def setting_command(message, force=False):
-            command = message.text.split()
-            if command[1] == "get":
-                if len(command) == 3:
-                    if is_setting(command[2]):
-                        reply_to(message, get_setting(command[2]).value)
-                        reply_to(message, get_setting(command[2]).description)
-                    else:
-                        reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?")
-                else:
-                    reply_to(message, setting_msg_helper)
-            elif command[1] == "set":
-                if len(command) == 4:
-                    if is_setting(command[2]):
-                        if not force:
-                            create_reform(message, 'setting', [command[2], command[3]])
-                        else:
-                            set_setting_value(command[2], command[3])
-                            reply_to(message, msg_change_implemented)
-                    else:
-                        reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?")
-                elif is_setting(command[2]) and command[2] in ["ServerWelcomeMessage", "Map", "PublicName", "PublicDescription", "DiscordChannel"]: # Exception List
+            def set_setting_cmd_handler(command=None, force=False):
+                if not command:
+                    command = message.text.split()
+                if is_setting(command[2]) and command[2] in ["ServerWelcomeMessage", "Map", "PublicName", "PublicDescription", "DiscordChannel"]: # Exception List
                     import re
                     match = re.match(r"/setting set (\w+) (.+)", message.text)
                     if match:
@@ -1794,14 +1803,36 @@ if __name__ == '__main__':
                             reply_to(message, msg_change_implemented)
                     else:
                         reply_to(message, setting_msg_helper)
-                elif len(command) == 5 and command[2] == 'force':
-                    if message.from_user.id in DEVS:
-                        command.pop(2)
-                        setting_command(message, force=True)
+                elif len(command) == 4:
+                    if is_setting(command[2]):
+                        if not force:
+                            create_reform(message, 'setting', [command[2], command[3]])
+                        else:
+                            set_setting_value(command[2], command[3])
+                            reply_to(message, msg_change_implemented)
                     else:
-                        reply_to(message, msg_only_master)
+                        reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?")
                 else:
                     reply_to(message, setting_msg_helper)
+            # Alright...
+            command = message.text.split()
+            if command[1] == "get":
+                if len(command) == 3:
+                    if is_setting(command[2]):
+                        reply_to(message, get_setting(command[2]).value)
+                        reply_to(message, get_setting(command[2]).description)
+                    else:
+                        reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?")
+                else:
+                    reply_to(message, setting_msg_helper)
+            elif command[1] == "set":
+                set_setting_cmd_handler()
+            elif command[1] == 'force' and command[2] == 'set' and len(command) == 5:
+                if message.from_user.id in DEVS:
+                    command.pop(1)
+                    set_setting_cmd_handler(command, force=True)
+                else:
+                    reply_to(message, msg_only_master)
             else:
                 reply_to(message, setting_msg_helper)
         # LISTEN FOR UPDATES FROM YOUR NON-ANONYMOUS POLLS
