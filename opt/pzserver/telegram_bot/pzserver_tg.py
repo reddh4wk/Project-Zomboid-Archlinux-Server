@@ -50,23 +50,41 @@
 ########################################
 
 import os
+import sys
 
 if __name__ == '__main__':
-    TEST_MODE = 0
+    if '--debug' in sys.argv:
+        DEBUG_MODE = 1
+    else:
+        DEBUG_MODE = 0
+
+if __name__ == '__main__':
+    # USEFUL PATHS OF RECURRENT USAGE
+    FILENAME = os.path.basename(__file__)
+    BASENAME = os.path.splitext(FILENAME)[0]
+    THIS_FOLDER = os.path.abspath(os.path.dirname(__file__))
+    SERVICE_NAME = os.path.basename(os.path.abspath(os.path.join(THIS_FOLDER, os.pardir))) # Please put the server in a folder with a name different form "vanilla" or "default"
+    SERVICE_LOG = os.path.join('/opt/', SERVICE_NAME, SERVICE_NAME+'.log')
+    HOME_FOLDER = os.path.expanduser("~")
+    ZOMBOID_FOLDER=os.path.join(HOME_FOLDER, 'Zomboid')
+    ZOMBOID_SETTINGS_FOLDER=os.path.join(ZOMBOID_FOLDER, 'Server')
+    ZOMBOID_PLAYER_DB=os.path.join(ZOMBOID_FOLDER, 'Saves/Multiplayer/'+SERVICE_NAME+'/players.db')
+
+    # CURRENT SETTINGS
+    SERVERINI_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, SERVICE_NAME+".ini")
+    SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, SERVICE_NAME+"_SandboxVars.lua")
+    # VANILLA SETTINGS
+    VANILLA_SERVERINI_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "vanilla.ini")
+    VANILLA_SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "vanilla_SandboxVars.lua")
+    # USER_DEFINED STANDARD SETTINGS
+    DEFAULT_SERVERINI_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "default.ini")
+    DEFAULT_SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "default_SandboxVars.lua")
+    
+    # TELEGRAM STUFF
     SERVER_CHATS=[] #Production
     DEBUG_CHAT = [] #Test
     TOKEN = '' # Telegram Bot API TOKEN
-    SERVICE_NAME = 'pzserver'
     DEVS=[] #Your telegram ID. It will allow you to force changes.
-
-########################################################################################################################
-### GET PATHS
-########################################################################################################################
-
-if __name__ == '__main__':
-    FILENAME = os.path.basename(__file__)
-    BASENAME = os.path.splitext(FILENAME)[0]
-    FOLDER = os.path.abspath(os.path.dirname(__file__))
 
 ########################################################################################################################
 ### INFORMATION FOR THE LOG FILE
@@ -299,61 +317,110 @@ def process_sandbox_vars(line):
         logger(e, "ERROR")
 
 if __name__ == '__main__':
-    SERVERINI = ["servertest.ini", "/opt/pzserver/Zomboid/Server/servertest.ini", process_serverini]
-    SANDBOXVARS = ["servertest_SandboxVars.lua", "/opt/pzserver/Zomboid/Server/servertest_SandboxVars.lua", process_sandbox_vars]
-    VANILLA_SERVERINI = ["servertest.ini", "/opt/pzserver/Zomboid/Server/vanilla.ini", process_serverini]
-    VANILLA_SANDBOXVARS = ["servertest_SandboxVars.lua", "/opt/pzserver/Zomboid/Server/vanilla_SandboxVars.lua", process_sandbox_vars]
-    DEFAULT_SERVERINI = ["servertest.ini", "/opt/pzserver/Zomboid/Server/default.ini", process_serverini]
-    DEFAULT_SANDBOXVARS = ["servertest_SandboxVars.lua", "/opt/pzserver/Zomboid/Server/default_SandboxVars.lua", process_sandbox_vars]
+    #.ini
+    SERVERINI = [SERVERINI_PATH, process_serverini]
+    VANILLA_SERVERINI = [VANILLA_SERVERINI_PATH, process_serverini]
+    DEFAULT_SERVERINI = [DEFAULT_SERVERINI_PATH, process_serverini]
+    #_SandboxVars.lua
+    SANDBOXVARS = [SANDBOXVARS_PATH, process_sandbox_vars]
+    VANILLA_SANDBOXVARS = [VANILLA_SANDBOXVARS_PATH, process_sandbox_vars]
+    DEFAULT_SANDBOXVARS = [DEFAULT_SANDBOXVARS_PATH, process_sandbox_vars]
 
 def get_settings(serverini, sandboxvars):
     try:
-        setting_files = [serverini, sandboxvars]
-        class Variable:
-            def __init__(self, value, description, file_path, line_number):
-                self.value = value
-                self.description = description
-                self.path = file_path
-                self.line = line_number
-        class Settings:
-            pass
-        settings = Settings()
-        for basename, file_path, processor in setting_files:
-            with open(file_path, 'r') as file:
-                description = ""
-                line_number=0
-                for line in file:
-                    processed = processor(line)
-                    if processed:
-                        is_description, data = processed[0], processed[1]
-                        if is_description:
-                            description += data + "\n"
-                        else:
-                            variable, value = data
-                            setattr(settings, variable, Variable(value, description, file_path, line_number))
-                            #print("section: "+basename); print(variable+": "+value); print(description); print(line_number); print("-------------------------")
-                            description = ""
-                    line_number += 1
-        return settings
+        import os
+        if os.path.exists(serverini[0]) and os.path.exists(sandboxvars[0]):
+            setting_files = [serverini, sandboxvars]
+            class Variable:
+                def __init__(self, value, description, file_path, line_number, basename):
+                    self.value = value
+                    self.description = description
+                    self.path = file_path
+                    self.line = line_number
+                    self.basename = basename
+            class Settings:
+                def print_all(self):
+                    for attr, value in vars(self).items():
+                        if isinstance(value, Variable):
+                            print(f"{attr}: {value.value}")
+            settings = Settings()
+            for file_path, processor in setting_files:
+                basename = os.path.basename(file_path)
+                with open(file_path, 'r') as file:
+                    description = ""
+                    line_number=0
+                    for line in file:
+                        processed = processor(line)
+                        if processed:
+                            is_description, data = processed[0], processed[1]
+                            if is_description:
+                                description += data + "\n"
+                            else:
+                                variable, value = data
+                                setattr(settings, variable, Variable(value, description, file_path, line_number, basename))
+                                #print("section: "+basename); print(variable+": "+value); print(description); print(line_number); print("-------------------------")
+                                description = ""
+                        line_number += 1
+            return settings
+        logger(f"\'{serverini[0]}\' or \'{sandboxvars[0]}\' wasn't found.", "ERROR")
+        return None
     except Exception as e:
         logger(e, "ERROR")
 
+def compare_settings(settings_to_show, settings_as_reference, as_text=False, console=False, exclusion_list=[]):
+    try:
+        differences = []
+        missing_in_subject = []
+        missing_in_reference = []
+        show_attributes = vars(settings_to_show).items()
+        for var_name, show_var_content in show_attributes:
+            if hasattr(settings_as_reference, var_name):
+                ref_var_content = getattr(settings_as_reference, var_name)
+                if show_var_content.value != ref_var_content.value and var_name not in exclusion_list:
+                    # Differences between same settings
+                    differences.append((var_name, show_var_content, ref_var_content))
+            else:
+                # Probably empty
+                missing_in_subject.append((var_name, show_var_content.value))
+        reference_attributes = vars(settings_as_reference).items()
+        for var_name, ref_var_content in reference_attributes:
+            if not hasattr(settings_to_show, var_name):
+                # If you want to collect also settings related to mods
+                missing_in_reference.append((var_name, ref_var_content.value))
+        if as_text:
+            text_chunks = []
+            current_text = ""
+            for var_name, show_var_content, ref_var_content in differences:
+                if not console:
+                    line = f"<b>{var_name}</b>: {show_var_content.value} | {ref_var_content.value}\n"
+                else:
+                    line = f"[{show_var_content.basename}] {var_name}: {show_var_content.value} [{ref_var_content.basename}: {ref_var_content.value}]\n"
+                if len(current_text) + len(line) > 4096:
+                    text_chunks.append(current_text)
+                    current_text = ""
+                current_text += line
+            if current_text:
+                text_chunks.append(current_text)
+            return text_chunks
+        else:
+            return [differences,missing_in_subject,missing_in_reference]
+    except Exception as e:
+        logger(e, "ERROR")
+
+def save_default_settings():
+    pass
+
 if __name__ == '__main__':
     global_settings = get_settings(SERVERINI, SANDBOXVARS)
-    if os.path.exists(VANILLA_SERVERINI[1]) and os.path.exists(VANILLA_SANDBOXVARS[1]):
-        vanilla_settings = get_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS)
-    else:
-        vanilla_settings = False
-        vanilla_settings_not_found_msg = f"Vanilla settings not found at {VANILLA_SERVERINI[1]} and {VANILLA_SANDBOXVARS[1]}. Please put vanilla settings here to fix this error."
-        print(vanilla_settings_not_found_msg)
-        logger(vanilla_settings_not_found_msg, "ERROR")
-    if os.path.exists(DEFAULT_SERVERINI[1]) and os.path.exists(DEFAULT_SANDBOXVARS[1]):
-        default_settings = get_settings(DEFAULT_SERVERINI, DEFAULT_SANDBOXVARS)
-    else:
-        if vanilla_settings:
-            default_settings = vanilla_settings
-        else:
-            default_settings = global_settings
+    if not global_settings:
+        print("File settings were not found. Being an almost essential part, I'll exit.")
+        exit()
+    vanilla_settings = get_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS)
+    if not vanilla_settings:
+        vanilla_settings = global_settings 
+    default_settings = get_settings(DEFAULT_SERVERINI, DEFAULT_SANDBOXVARS)
+    if not default_settings:
+        default_settings = global_settings
 
 ########################################
 ### SETTINGS MANAGERS
@@ -590,9 +657,9 @@ def uninstall_mod(modid, workshopid, modid_setting='Mods', workshopid_setting='W
 
 if __name__ == '__main__':
     import os
-    reforms_db = os.path.join(FOLDER, 'reforms.db')
-    players_db = os.path.join(FOLDER,'players.db')
-    sessions_db = os.path.join(FOLDER,'sessions.db')
+    reforms_db = os.path.join(THIS_FOLDER, 'reforms.db')
+    players_db = os.path.join(THIS_FOLDER,'players.db')
+    sessions_db = os.path.join(THIS_FOLDER,'sessions.db')
 
 # TO CREATE SETTINGS BACKUPS
 def selfcreate_sqlite_table(table_name, **kwargs):
@@ -602,7 +669,7 @@ def selfcreate_sqlite_table(table_name, **kwargs):
         if len(kwargs) < 1:
             return
         db_file = f"{table_name}.db"
-        db_path = os.path.join(FOLDER, db_file)
+        db_path = os.path.join(THIS_FOLDER, db_file)
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         pk = list(kwargs.keys())[0]
@@ -1025,14 +1092,16 @@ def get_user_activity_info(telegram_id):
         voted_no_perc = (voted_no_count / poll_count * 100) if poll_count != 0 else 0
         did_not_vote_perc = (did_not_vote_count / poll_count * 100) if poll_count != 0 else 0
 
-        return f'''Login count: {login_count}
-Total time played: {format_time(total_time_connected)}
-Average session: {format_time(avg_session_duration)}
+        return f'''<b>Login count</b>: {login_count}
+<b>Total time played</b>: {format_time(total_time_connected)}
+<b>Average session</b>: {format_time(avg_session_duration)}
 
-Reforms proposed: {proposed_reforms_count}  [ {implemented_reforms_count} ✓ ]
+<b>Zombie Killed:</b> {'2'}
+
+<b>Reforms proposed</b>: {proposed_reforms_count} ({round(implemented_reforms_count/proposed_reforms_count*100)}% approved)
 
 Out of {poll_count} polls, you voted:
-Yes: {voted_yes_count} ({voted_yes_perc}%) - No: {voted_no_count} ({voted_no_perc}%) - Blank: {did_not_vote_count} ({did_not_vote_perc}%)'''
+<b>Yes</b>: {voted_yes_count} ({round(voted_yes_perc)}%) - <b>No</b>: {voted_no_count} ({round(voted_no_perc)}%) - <b>Blank</b>: {did_not_vote_count} ({round(did_not_vote_perc)}%)'''
 
     except Exception as e:
         logger(e, "ERROR")
@@ -1065,7 +1134,7 @@ def add_cmd_bulk(command_list, cmd_list):
 def init_commands():
     try:
         command_list = []
-        return add_cmd_bulk(command_list, [[start_cmd,start_desc],[restart_cmd,restart_desc],[status_cmd,status_desc],[stats_cmd,stats_desc],[mod_cmd,mod_desc],[setting_cmd,setting_desc],[register_cmd,register_desc],[help_cmd,help_desc]])
+        return add_cmd_bulk(command_list, [[start_cmd,start_desc],[restart_cmd,restart_desc],[status_cmd,status_desc],[stats_cmd,stats_desc],[compare_cmd,compare_desc],[mod_cmd,mod_desc],[setting_cmd,setting_desc],[register_cmd,register_desc],[help_cmd,help_desc]])
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1077,6 +1146,13 @@ if __name__ == '__main__':
     start_msg='Hi, I am Rotting Ghoul! I can automatically get you updates on the status of the PZserver.'
     status_cmd='status'
     status_desc='Retrive the current status of '+SERVICE_NAME
+    set_default_cmd='default'
+    set_default_msg_helper='Use /default to set the current settings as default settings'
+    compare_cmd='diff'
+    compare_desc='Shows differences between current settings and vanilla or default'
+    compare_msg_helper='''Show differences between sets of settings:
+        /'''+compare_cmd+''' vanilla
+        /'''+compare_cmd+' default'
     restart_cmd='restart'
     restart_confirm_cmd='confirm'
     restart_cancel_cmd='cancel'
@@ -1111,7 +1187,8 @@ https://help.steampowered.com/en/faqs/view/2816-BE67-5B69-0FEC'''
     help_desc='Provide the command legenda.'
     help_msg='List of the commands:\n/'+help_cmd+': '+help_desc+'''
 /'''+restart_cmd+': '+restart_desc+'''
-/'''+status_cmd+': '+status_desc+'\n'+mod_msg_helper+'\n'+setting_msg_helper+'\n'+stats_msg_helper+'\n'+register_msg_helper
+/'''+status_cmd+': '+status_desc+'''
+/'''+compare_cmd+': '+compare_msg_helper+'\n'+mod_msg_helper+'\n'+setting_msg_helper+'\n'+stats_msg_helper+'\n'+register_msg_helper
 
     ### OTHER MESSAGES
 
@@ -1188,7 +1265,7 @@ if __name__ == '__main__':
 
 def server_chat_message(text, disable_notification=True, disable_web_page_preview=False, parse_mode='Markdown'):
     try:
-        if not TEST_MODE:
+        if not DEBUG_MODE:
             for each in SERVER_CHATS:
                 bot.send_message(each, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
         else:
@@ -1213,6 +1290,16 @@ def member_is_admin(message):
     except Exception as e:
         logger(e, "ERROR")
 
+def member_is_dev(message):
+    try:
+        if message.from_user.id in DEVS:
+            return True
+        else:
+            reply_to(message, msg_only_master)
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
+
 ########################################################################################################################
 ### GAME RUNTIME LOG PARSING MANAGER
 ########################################################################################################################
@@ -1220,8 +1307,6 @@ def member_is_admin(message):
 ### PARSING FLAGS & CONSTANTS
 
 if __name__ == '__main__':
-    PZSERVER_LOG = '/opt/pzserver/pzserver.log'
-
     open_sessions = []
     
     command_flag = True
@@ -1249,25 +1334,31 @@ if __name__ == '__main__':
 def remove_from_game_db(steamid, username):
     import sqlite3
     try:
-        conn = sqlite3.connect('/opt/pzserver/Zomboid/Saves/Multiplayer/servertest/players.db')
+        TEMP_DB=THIS_FOLDER+'temp_MFA.db'
+        run_command(f'cp {ZOMBOID_PLAYER_DB} {TEMP_DB}')
+        conn = sqlite3.connect(TEMP_DB)
         c = conn.cursor()
         c.execute("DELETE FROM networkPlayers WHERE steamid = ? AND username = ?", (steamid, username))
         conn.commit()
         conn.close()
+        run_command(f'cp {TEMP_DB} {ZOMBOID_PLAYER_DB}')
     except Exception as e:
         logger(e, "ERROR")
 
-def multi_fucker_autentication(steam_id, username):
+def multi_fucker_autentication(steam_id, username, login):
     try:
         if MFA:
             for entry in MFA:
                 message, steam_id, verification, telegram_id = entry
                 if username == verification:
-                    registration = player_set_telegram_id(steam_id, telegram_id)
-                    reply_to(message, "Your game account has been successfully linked.")
-                    remove_from_game_db(steam_id, username)
-                    MFA.pop(MFA.index(entry))
-                    return True
+                    if login:
+                        registration = player_set_telegram_id(steam_id, telegram_id)
+                        reply_to(message, "Your game account has been successfully linked.")
+                        return True
+                    else:
+                        remove_from_game_db(steam_id, username)
+                        MFA.pop(MFA.index(entry))
+                        return True
         return False
     except Exception as e:
         logger(e, "ERROR")
@@ -1275,8 +1366,7 @@ def multi_fucker_autentication(steam_id, username):
 def player_client_login_event(steam_id, username, ip, access='user'):
     try:
         global open_sessions
-        mfa = multi_fucker_autentication(steam_id, username)
-        if not mfa:
+        if not multi_fucker_autentication(steam_id, username, 1):
             server_chat_message(f"A player connected to the server: {username}")
             upsert_player(steam_id, username, access)
             session = Session()
@@ -1289,7 +1379,7 @@ def player_client_login_event(steam_id, username, ip, access='user'):
 def player_client_logout_event(steam_id, username, ip, access='user'):
     try:
         global open_sessions
-        if not any(username == verification for message, steam_id, verification, telegram_id in MFA):
+        if not multi_fucker_autentication(steam_id, username, 0):
             server_chat_message(f"A player disconnected from the server: {username}")
             upsert_player(steam_id, username, access)
             if open_sessions:
@@ -1339,7 +1429,7 @@ def alert_bot(keyword, line):
     except Exception as e:
         logger(e, "ERROR")
 
-def monitor_log(filename=PZSERVER_LOG, keywords=[log_key_start, log_key_stop, log_key_client_init, log_key_client_logout, log_key_cmd, log_key_mod_fail]):
+def monitor_log(filename=SERVICE_LOG, keywords=[log_key_start, log_key_stop, log_key_client_init, log_key_client_logout, log_key_cmd, log_key_mod_fail]):
     try:
         import subprocess
         tail_process = subprocess.Popen(['tail', '-f', filename], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -1626,13 +1716,42 @@ if __name__ == '__main__':
             else:
                 status = "???"
             reply_to(message, "The PZserver is currently "+status)
+        # SHOW DIFF
+        @bot.message_handler(commands=[compare_cmd])
+        def compare_command(message):
+            command = message.text.split()
+            if len(command) == 2:
+                exclusion_list=['ServerWelcomeMessage','Mods','WorkshopItems','PublicDescription','PublicName','ServerPlayerID','ResetID']
+                if command[1] == 'vanilla':
+                    text_chunks = compare_settings(global_settings, vanilla_settings, as_text=True, exclusion_list=exclusion_list)
+                    for chunk in text_chunks:
+                        reply_to(message, chunk, parse_mode='HTML')
+                elif command[1] == 'default':
+                    text_chunks = compare_settings(global_settings, default_settings, as_text=True, exclusion_list=exclusion_list)
+                    for chunk in text_chunks:
+                        reply_to(message, chunk, parse_mode='HTML')
+                else:
+                    reply_to(message, compare_msg_helper)
+            else:
+                reply_to(message, compare_msg_helper)
+        # SET SETTING DEFAULT
+        @bot.message_handler(commands=[set_default_cmd])
+        def set_setting_defaults_command(message):
+            if is_dev(message):
+                command = message.text.split()
+                if len(command) == 1:
+                    run_command(f"cp {serverini[0]} {DEFAULT_serverini[0]}")
+                    run_command(f"cp {sandboxvars[0]} {DEFAULT_sandboxvars[0]}")
+                    reply_to(message, "New defaults have been set based on current settings")
+                else:
+                    reply_to(message, set_default_msg_helper)
         # STATS
         @bot.message_handler(commands=[stats_cmd])
         def stats_command(message):
             command = message.text.split()
             if len(command) == 1:
                 if user_is_registered(message.from_user.id):
-                    reply_to(message, get_user_activity_info(message.from_user.id))
+                    reply_to(message, get_user_activity_info(message.from_user.id), parse_mode='HTML')
                 else:
                     reply_to(message, "You need to register yourself if you want to see your stats.")
                     reply_to(message, register_msg_helper)
@@ -1641,7 +1760,7 @@ if __name__ == '__main__':
                 if steam_id:
                     telegram_id = player_is_registered(steam_id)
                     if telegram_id:
-                        reply_to(message, get_user_activity_info(telegram_id))
+                        reply_to(message, get_user_activity_info(telegram_id), parse_mode='HTML')
                     else:
                         reply_to(message, "This user is not registered yet.")
                 else:
@@ -1668,8 +1787,7 @@ if __name__ == '__main__':
         # RESTART
         @bot.message_handler(commands=[restart_cmd])
         def restart_command(message):
-            is_admin = member_is_admin(message)
-            if is_admin:
+            if member_is_admin(message):
                 if check_service_status():
                     save_restart(restart_cmd, message.from_user.id)
                     reply_to(message, restart_msg)
@@ -1776,11 +1894,9 @@ if __name__ == '__main__':
                 elif command[1] == 'move' and len(command) == 4 and string_is_integer(command[2]) and string_is_integer(command[3]):
                     move_mod(int(command[2]), int(command[3]))
                 elif command[1] == 'force' and len(command) in range(3,6):
-                    if message.from_user.id in DEVS:
+                    if is_dev(message):
                         command.pop(1)
                         install_uninstall_mod_cmd_handler(command, force=True)
-                    else:
-                        reply_to(message, msg_only_master)
                 else:
                     reply_to(message, mod_msg_helper)
             else:
@@ -1828,11 +1944,10 @@ if __name__ == '__main__':
             elif command[1] == "set":
                 set_setting_cmd_handler()
             elif command[1] == 'force' and command[2] == 'set' and len(command) == 5:
-                if message.from_user.id in DEVS:
+                is_dev = member_is_dev(message)
+                if is_dev(message):
                     command.pop(1)
                     set_setting_cmd_handler(command, force=True)
-                else:
-                    reply_to(message, msg_only_master)
             else:
                 reply_to(message, setting_msg_helper)
         # LISTEN FOR UPDATES FROM YOUR NON-ANONYMOUS POLLS
