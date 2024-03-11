@@ -1,4 +1,5 @@
 # Project Zomboid Server with Telegram Integration
+## Under active development! Feel free to write in the Issues section if there's a bug.
 
 Looking for a graceful shutdown and a way to check easily logs and the shell running your application server? You're in the right place!
 Would you like a voting system to vote with your friends for the mods to install and the settings to change on the server? You're in the right place!
