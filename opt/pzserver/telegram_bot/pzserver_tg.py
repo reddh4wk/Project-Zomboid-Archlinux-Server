@@ -63,19 +63,26 @@ if __name__ == '__main__':
     FILENAME = os.path.basename(__file__)
     BASENAME = os.path.splitext(FILENAME)[0]
     THIS_FOLDER = os.path.abspath(os.path.dirname(__file__))
-    SERVICE_NAME = os.path.basename(os.path.abspath(os.path.join(THIS_FOLDER, os.pardir))) # Please put the server in a folder with a name different form "vanilla" or "default"
+    SERVICE_FOLDER = os.path.abspath(os.path.join(THIS_FOLDER, os.pardir))
+    SERVICE_NAME = os.path.basename(SERVICE_FOLDER) # Please put the server in a folder with a name different form "vanilla" or "default"
     SERVICE_LOG = os.path.join('/opt/', SERVICE_NAME, SERVICE_NAME+'.log')
     HOME_FOLDER = os.path.expanduser("~")
     ZOMBOID_FOLDER=os.path.join(HOME_FOLDER, 'Zomboid')
     ZOMBOID_SETTINGS_FOLDER=os.path.join(ZOMBOID_FOLDER, 'Server')
     ZOMBOID_PLAYER_DB=os.path.join(ZOMBOID_FOLDER, 'Saves/Multiplayer/'+SERVICE_NAME+'/players.db')
+    ZOMBOID_SERVER_DB=os.path.join(ZOMBOID_FOLDER, 'db/'+SERVICE_NAME+'.db')
+
+    # THIS WILL SLOW DOWN BOOT PROCESS A BIT
+    AUTOUPDATE_VANILLA_SETTINGS_ON_START = 1
+    VANILLA_SERVER_NAME = "vanilla"
+    VANILLA_LOG_FILE = os.path.join(SERVICE_FOLDER, VANILLA_SERVER_NAME+".log")
 
     # CURRENT SETTINGS
     SERVERINI_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, SERVICE_NAME+".ini")
     SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, SERVICE_NAME+"_SandboxVars.lua")
     # VANILLA SETTINGS
-    VANILLA_SERVERINI_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "vanilla.ini")
-    VANILLA_SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "vanilla_SandboxVars.lua")
+    VANILLA_SERVERINI_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, VANILLA_SERVER_NAME+".ini")
+    VANILLA_SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, VANILLA_SERVER_NAME+"_SandboxVars.lua")
     # USER_DEFINED STANDARD SETTINGS
     DEFAULT_SERVERINI_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "default.ini")
     DEFAULT_SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "default_SandboxVars.lua")
@@ -367,7 +374,7 @@ def get_settings(serverini, sandboxvars):
     except Exception as e:
         logger(e, "ERROR")
 
-def compare_settings(settings_to_show, settings_as_reference, as_text=False, console=False, exclusion_list=[]):
+def compare_settings(settings_to_show, settings_as_reference, as_text=False, console=False, exclusion_list=[], exclude_AntiCheatProtectionType=True):
     try:
         differences = []
         missing_in_subject = []
@@ -377,8 +384,13 @@ def compare_settings(settings_to_show, settings_as_reference, as_text=False, con
             if hasattr(settings_as_reference, var_name):
                 ref_var_content = getattr(settings_as_reference, var_name)
                 if show_var_content.value != ref_var_content.value and var_name not in exclusion_list:
-                    # Differences between same settings
-                    differences.append((var_name, show_var_content, ref_var_content))
+                    if exclude_AntiCheatProtectionType:
+                        if not var_name.startswith("AntiCheatProtectionType"):
+                            # Differences between same settings
+                            differences.append((var_name, show_var_content, ref_var_content))
+                    else:
+                        # Differences between same settings
+                        differences.append((var_name, show_var_content, ref_var_content))
             else:
                 # Probably empty
                 missing_in_subject.append((var_name, show_var_content.value))
@@ -407,20 +419,11 @@ def compare_settings(settings_to_show, settings_as_reference, as_text=False, con
     except Exception as e:
         logger(e, "ERROR")
 
-def save_default_settings():
-    pass
-
 if __name__ == '__main__':
     global_settings = get_settings(SERVERINI, SANDBOXVARS)
     if not global_settings:
         print("File settings were not found. Being an almost essential part, I'll exit.")
         exit()
-    vanilla_settings = get_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS)
-    if not vanilla_settings:
-        vanilla_settings = global_settings 
-    default_settings = get_settings(DEFAULT_SERVERINI, DEFAULT_SANDBOXVARS)
-    if not default_settings:
-        default_settings = global_settings
 
 ########################################
 ### SETTINGS MANAGERS
@@ -439,15 +442,30 @@ def setting_timestamp():
     except Exception as e:
         logger(e, "ERROR")
 
-def save_setting_to_file(setting, value):
+def save_setting_to_file(setting, value, source_settings=global_settings):
     try:
-        file_path = getattr(global_settings, setting).path
+        file_path = getattr(source_settings, setting).path
         with open(file_path, 'r') as file:
             all_lines = file.readlines()
-            line_number = getattr(global_settings, setting).line
+            line_number = getattr(source_settings, setting).line
             line = all_lines[line_number]
             if setting in line:
-                all_lines[line_number] = line.replace(getattr(global_settings, setting).value, value)
+                old_setting = getattr(source_settings, setting)
+                if old_setting.value != "":
+                    new_line = line.replace(old_setting.value, value)
+                else:
+                    if ".ini" in old_setting.basename:
+                        line = line.split("=")
+                        line.insert(1, "="+value)
+                        new_line = ''.join(line)
+                    elif ".lua" in old_setting.basename:
+                        line = line.split("=")
+                        line.insert(1, "= "+value)
+                        new_line = ''.join(line)
+                    else:
+                        logger(f"Not determinable file type for: {old_setting.basename}", "ERROR")
+                logger(f"In: {file_path}\n{new_line}", "CHANGE")
+                all_lines[line_number] = new_line
                 with open(file_path, 'w') as file:
                     file.writelines(all_lines)
                 return True
@@ -461,19 +479,19 @@ def is_setting(setting):
     except Exception as e:
         logger(e, "ERROR")
 
-def get_setting(setting):
+def get_setting(setting, source_settings=global_settings):
     try:
-        if hasattr(global_settings, setting):
-            return getattr(global_settings, setting)
+        if hasattr(source_settings, setting):
+            return getattr(source_settings, setting)
         else:
             return False
     except Exception as e:
         logger(e, "ERROR")
 
-def set_setting_value(setting, value):
+def set_setting_value(setting, value, source_settings=global_settings):
     try:
-        if hasattr(global_settings, setting):
-            if save_setting_to_file(setting, value):
+        if hasattr(source_settings, setting):
+            if save_setting_to_file(setting, value, source_settings=source_settings):
                 reload_settings()
                 return True
             else:
@@ -1331,17 +1349,31 @@ if __name__ == '__main__':
 
 ### PARSING FUNCTIONS
 
-def remove_from_game_db(steamid, username):
+def remove_from_whitelist(steamid, username):
     import sqlite3
     try:
-        TEMP_DB=THIS_FOLDER+'temp_MFA.db'
+        TEMP_DB=THIS_FOLDER+'MFAtemp_'+SERVICE_NAME+'.db'
+        run_command(f'cp {ZOMBOID_SERVER_DB} {TEMP_DB}')
+        conn = sqlite3.connect(TEMP_DB)
+        c = conn.cursor()
+        c.execute("DELETE FROM whitelist WHERE steamid = ? AND username = ?", (steamid, username))
+        conn.commit()
+        conn.close()
+        run_command(f'cp {TEMP_DB} {ZOMBOID_SERVER_DB}')
+    except Exception as e:
+        logger(e, "ERROR")
+
+def remove_from_player_db(steamid, username):
+    import sqlite3
+    try:
+        TEMP_DB=THIS_FOLDER+'MFAtemp_players.db'
         run_command(f'cp {ZOMBOID_PLAYER_DB} {TEMP_DB}')
         conn = sqlite3.connect(TEMP_DB)
         c = conn.cursor()
         c.execute("DELETE FROM networkPlayers WHERE steamid = ? AND username = ?", (steamid, username))
         conn.commit()
         conn.close()
-        run_command(f'cp {TEMP_DB} {ZOMBOID_PLAYER_DB}')
+        run_command(f'mv {TEMP_DB} {ZOMBOID_PLAYER_DB}')
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1356,7 +1388,8 @@ def multi_fucker_autentication(steam_id, username, login):
                         reply_to(message, "Your game account has been successfully linked.")
                         return True
                     else:
-                        remove_from_game_db(steam_id, username)
+                        remove_from_player_db(steam_id, username)
+                        remove_from_whitelist(steam_id, username)
                         MFA.pop(MFA.index(entry))
                         return True
         return False
@@ -1449,10 +1482,112 @@ def monitor_log(filename=SERVICE_LOG, keywords=[log_key_start, log_key_stop, log
 if __name__ == '__main__':
     try:
         import threading
-        poll_monitor_log_thread = threading.Thread(target=monitor_log)
-        poll_monitor_log_thread.start()
+        pzserver_monitor_log_thread = threading.Thread(target=monitor_log)
+        pzserver_monitor_log_thread.start()
     except Exception as e:
         logger(e, "ERROR")
+
+########################################################################################################################
+### VANILLA SETTINGS GENERATION
+########################################################################################################################
+
+def vanilla_monitor_log(filename=VANILLA_LOG_FILE, keywords=[log_key_start,log_key_stop]):
+    try:
+        import subprocess
+        run_command("> "+VANILLA_LOG_FILE)
+        tail_process = subprocess.Popen(['tail', '-f', filename], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)    
+        for line in tail_process.stdout:
+            for keyword in keywords:
+                if keyword in line:
+                    if keyword == log_key_start:
+                        vanilla_started_event.set()
+                        run_command("tmux send-keys -t "+VANILLA_SERVER_NAME+" \"quit\" C-m")
+                    if keyword == log_key_stop:
+                        vanilla_exit_event.set()
+                        break
+    except Exception as e:
+        logger(e, "ERROR")
+
+def start_vanilla_server():
+    try:
+        VANILLA_SERVER_CMD_START = os.path.join(SERVICE_FOLDER, "start-server.sh")+" -servername "+VANILLA_SERVER_NAME+" | tee "+VANILLA_LOG_FILE
+        VANILLA_TMUX_SESSION_START = "tmux new-session -d -s "+VANILLA_SERVER_NAME+" \""+VANILLA_SERVER_CMD_START+"\""
+        run_command(VANILLA_TMUX_SESSION_START)
+    except Exception as e:
+        logger(e, "ERROR")
+
+def stop_vanilla_server():
+    try:
+        vanilla_monitor_log_thread = threading.Thread(target=vanilla_monitor_log)
+        vanilla_monitor_log_thread.start()
+    except Exception as e:
+        logger(e, "ERROR")
+
+def tmux_session_is_still_open(tmux_session_name):
+    try:
+        command = f"tmux list-sessions | grep {tmux_session_name}"
+        output = run_command(command)
+        if output:
+            return True
+        return False
+    except Exception as e:
+        logger(e, "ERROR")
+        return False
+
+def regenerate_vanilla_settings():
+    try:
+        import time
+        global vanilla_settings
+        global vanilla_started_event
+        global vanilla_exit_event
+        global vanilla_settings_event
+        def rm(path):
+            if os.path.exists(path):
+                return run_command("rm "+path)
+        rm(VANILLA_SERVERINI_PATH)
+        rm(VANILLA_SANDBOXVARS_PATH)
+        start_vanilla_server()
+        stop_vanilla_server()
+        vanilla_started_event.wait()
+        temp_vanilla_settings = get_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS)
+        Mods = get_setting('Mods').value
+        WorkshopItems = get_setting('WorkshopItems').value
+        set_setting_value('Mods', Mods, temp_vanilla_settings)
+        set_setting_value('WorkshopItems', WorkshopItems, temp_vanilla_settings)
+        vanilla_exit_event.wait()
+        counter = 0
+        while True:
+            vanilla_started_event = threading.Event()
+            vanilla_exit_event = threading.Event()
+            if not tmux_session_is_still_open(VANILLA_SERVER_NAME):
+                start_vanilla_server()
+                stop_vanilla_server()
+                vanilla_started_event.wait()
+                vanilla_settings = get_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS)
+                vanilla_settings_event.set()
+                break
+            else:
+                time.sleep(1)
+                counter += 1
+                if counter == 60:
+                    w = "Vanilla setting generation is taking more than expected. Check the logs and the vanilla tmux session?"
+                    print(w)
+                    logger(w, "WARNING")
+    except Exception as e:
+        logger(e, "ERROR")
+
+if __name__ == '__main__':
+    vanilla_settings = 404
+    vanilla_started_event = threading.Event()
+    vanilla_exit_event = threading.Event()
+    vanilla_settings_event = threading.Event()
+    regenerate_setting_thread = threading.Thread(target=regenerate_vanilla_settings)
+    if AUTOUPDATE_VANILLA_SETTINGS_ON_START:
+        regenerate_setting_thread.start()
+    else:
+        vanilla_settings = get_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS)
+        if not vanilla_settings:
+            vanilla_settings = 404 
 
 ########################################################################################################################
 ### POLLING MANAGER & MONITOR
@@ -1720,18 +1855,23 @@ if __name__ == '__main__':
         @bot.message_handler(commands=[compare_cmd])
         def compare_command(message):
             command = message.text.split()
-            if len(command) == 2:
-                exclusion_list=['ServerWelcomeMessage','Mods','WorkshopItems','PublicDescription','PublicName','ServerPlayerID','ResetID']
-                if command[1] == 'vanilla':
+            if len(command) == 1:
+                def send_diff():
+                    exclusion_list=['ServerWelcomeMessage','Mods','WorkshopItems','PublicDescription','PublicName','ServerPlayerID','ResetID']
                     text_chunks = compare_settings(global_settings, vanilla_settings, as_text=True, exclusion_list=exclusion_list)
                     for chunk in text_chunks:
                         reply_to(message, chunk, parse_mode='HTML')
-                elif command[1] == 'default':
-                    text_chunks = compare_settings(global_settings, default_settings, as_text=True, exclusion_list=exclusion_list)
-                    for chunk in text_chunks:
-                        reply_to(message, chunk, parse_mode='HTML')
+                    return True
+                if not vanilla_settings == 404:
+                    send_diff()
                 else:
-                    reply_to(message, compare_msg_helper)
+                    reply_to(message, "Vanilla settings are being generated. Please wait.")
+                    import threading
+                    def send_diff_when_ready():
+                        vanilla_settings_event.wait()
+                        send_diff()
+                    send_diff_later = threading.Thread(target=send_diff_when_ready)
+                    send_diff_later.start()
             else:
                 reply_to(message, compare_msg_helper)
         # SET SETTING DEFAULT
