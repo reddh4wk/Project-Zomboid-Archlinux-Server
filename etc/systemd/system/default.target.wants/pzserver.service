@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 User=pzserver
-ExecStart=pzserver --start
+ExecStart=/opt/pzserver/pzserver.sh
 ExecStop=pzserver --stop
 RemainAfterExit=no
 Type=forking
