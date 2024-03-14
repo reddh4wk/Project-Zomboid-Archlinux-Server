@@ -9,4 +9,4 @@ done
 DIR=$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )
 
 PYTHON_VENV_BIN="$DIR/python/bin/python"
-$PYTHON_VENV_BIN $DIR/telegram_bot/pzserver_tg.py >> $DIR/telegram_bot/pzserver_tg.log
+$PYTHON_VENV_BIN $DIR/telegram_bot/pzserver_tg.py >> $DIR/telegram_bot/pzserver_tg.log &
