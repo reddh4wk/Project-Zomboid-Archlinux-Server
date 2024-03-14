@@ -66,6 +66,7 @@ if __name__ == '__main__':
     SERVICE_FOLDER = os.path.abspath(os.path.join(THIS_FOLDER, os.pardir))
     SERVICE_NAME = os.path.basename(SERVICE_FOLDER) # Please put the server in a folder with a name different form "vanilla" or "default"
     SERVICE_LOG = os.path.join('/opt/', SERVICE_NAME, SERVICE_NAME+'.log')
+    SERVICE_MANAGER = os.path.join(SERVICE_FOLDER, SERVICE_NAME+"_manager.sh")
     HOME_FOLDER = os.path.expanduser("~")
     ZOMBOID_FOLDER=os.path.join(HOME_FOLDER, 'Zomboid')
     ZOMBOID_SETTINGS_FOLDER=os.path.join(ZOMBOID_FOLDER, 'Server')
@@ -73,7 +74,7 @@ if __name__ == '__main__':
     ZOMBOID_SERVER_DB=os.path.join(ZOMBOID_FOLDER, 'db/'+SERVICE_NAME+'.db')
 
     # THIS WILL SLOW DOWN BOOT PROCESS A BIT
-    AUTOUPDATE_VANILLA_SETTINGS_ON_START = 1
+    AUTOUPDATE_VANILLA_SETTINGS_ON_START = 2 # 1=Always, 0=Never, 2=Only On Mod Changes
     VANILLA_SERVER_NAME = "vanilla"
     VANILLA_LOG_FILE = os.path.join(SERVICE_FOLDER, VANILLA_SERVER_NAME+".log")
 
@@ -99,22 +100,28 @@ if __name__ == '__main__':
 
 def log_timestamp():
     from datetime import datetime
-    return datetime.now().strftime('[%Y-%m-%d %H:%M:%S]')
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 def log_file():
     import os
-    return os.path.join(os.path.abspath(os.path.dirname(__file__)), os.path.splitext(os.path.basename(__file__))[0]+'.log')
+    return os.path.join(THIS_FOLDER, BASENAME+'.log')
 
 def logger(message, msg_type, log_file=log_file()):
     import os
     import traceback
     with open(log_file, 'a') as f:
         timestamp = log_timestamp()
-        f.write(timestamp+"["+msg_type+"] "+str(message)+'\n')
+        msg_body = f"[{timestamp}][{msg_type}] {str(message)}"
+        if DEBUG_MODE:
+            print(msg_body)
+        f.write(msg_body+"\n")
         traceback_str = traceback.format_exc()
         if msg_type == 'ERROR':
             if traceback_str:
-                f.write(timestamp+"[TRACEBACK] "+traceback_str)
+                msg_body = f"[{timestamp}][TRACEBACK] {traceback_str}"
+                if DEBUG_MODE:
+                    print(msg_body)
+                f.write(msg_body+"\n")
 
 def log_emendazio(max_rows=1000, buffer=300, log_file=log_file()):
     try:
@@ -156,19 +163,31 @@ def unix_timestamp():
 def unix_timestamp_to_log_timestamp(unix_timestamp):
     try:
         from datetime import datetime
-        return datetime.utcfromtimestamp(unix_timestamp).strftime('[%Y-%m-%d %H:%M:%S]')
+        return datetime.utcfromtimestamp(unix_timestamp).strftime('%Y-%m-%d %H:%M:%S')
     except Exception as e:
         logger(e, "ERROR")
 
 def run_command(command):
     try:
+        if DEBUG_MODE:
+            print(f"[{log_timestamp()}][INFO] BASH command issued: {command}")
         import subprocess
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         output, error = process.communicate()
         if process.returncode != 0:
-            logger(error, "OS ERROR")
-            return None
+            if output:
+                logger(output, "OS ERROR")
+            if error:
+                logger(error, "OS ERROR")
+            return False
         return output
+    except Exception as e:
+        logger(e, "ERROR")
+
+def rm(path):
+    try:
+        if os.path.exists(path):
+            return run_command("rm "+path)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -226,15 +245,46 @@ def ensure_max_occurrences(array, value, N):
     except Exception as e:
         logger(e, "ERROR")
 
-def format_time(seconds):
+def format_time(seconds, precision='s'):
     minutes, seconds = divmod(seconds, 60)
     hours, minutes = divmod(minutes, 60)
     if hours > 0:
-        return f"{int(hours)} h {int(minutes)} m {int(seconds)} s"
+        if precision == 's':
+            return f"{int(hours)} h {int(minutes)} m {int(seconds)} s"
+        elif precision == 'm':
+            return f"{int(hours)} h {int(minutes)} m"
+        else:
+            return f"{int(hours)} h"
     elif minutes > 0:
-        return f"{int(minutes)} m {int(seconds)} s"
+        if precision == 's':
+            return f"{int(minutes)} m {int(seconds)} s"
+        else:
+            return f"{int(minutes)} m"
     else:
         return f"{int(seconds)} s"
+
+def fake_message(chat_id, message_id):
+    try:
+        class fakemessage:
+            def __init__(self, chat_id, message_id):
+                self.chat_id = chat_id
+                self.message_id = message_id
+            @property
+            def chat(self):
+                return fakechat(self.chat_id)
+            @property
+            def id(self):
+                return self.message_id
+        class fakechat:
+            def __init__(self, chat_id):
+                self.chat_id = chat_id
+            @property
+            def id(self):
+                return self.chat_id
+        # Eat your broccoli, bitch
+        return fakemessage(chat_id, message_id)
+    except Exception as e:
+        logger(e, "ERROR")
 
 ########################################################################################################################
 ### AVOID DOUBLE EXECUTION OF THIS SCRIPT ON THE CURRENT SYSTEM
@@ -675,9 +725,7 @@ def uninstall_mod(modid, workshopid, modid_setting='Mods', workshopid_setting='W
 
 if __name__ == '__main__':
     import os
-    reforms_db = os.path.join(THIS_FOLDER, 'reforms.db')
-    players_db = os.path.join(THIS_FOLDER,'players.db')
-    sessions_db = os.path.join(THIS_FOLDER,'sessions.db')
+    pztgdb = os.path.join(THIS_FOLDER, 'pztg.db')
 
 # TO CREATE SETTINGS BACKUPS
 def selfcreate_sqlite_table(table_name, **kwargs):
@@ -748,47 +796,52 @@ class Reform:
 def init_reform_table():
     try:
         import sqlite3
-        conn = sqlite3.connect(reforms_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS reforms (
-        reform_id INTEGER PRIMARY KEY,
-        reform_chat_id INTEGER,
-        reform_name TEXT,
-        reform_description TEXT,
-        reform_date INTEGER,
-        reform_implemented INTEGER,
-        reform_is_active INTEGER,
-        poll_id INTEGER,
-        poll_message_id INTEGER,
-        poll_options INTEGER,
-        poll_consensus_coefficient REAL,
-        poll_stop_date INTEGER,
-        poll_yes_list TEXT,
-        poll_no_list TEXT,
-        change_ctype TEXT,
-        change_mod_action TEXT,
-        change_mod_modid TEXT,
-        change_mod_workshopid TEXT,
-        change_setting_variable TEXT,
-        change_setting_old_value TEXT,
-        change_setting_new_value TEXT,
-        proposer_first_name TEXT,
-        proposer_last_name TEXT,
-        proposer_username TEXT,
-        proposer_id INTEGER)''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS reforms
+            (
+                reform_id INTEGER PRIMARY KEY,
+                reform_chat_id INTEGER,
+                reform_name TEXT,
+                reform_description TEXT,
+                reform_date INTEGER,
+                reform_implemented INTEGER,
+                reform_is_active INTEGER,
+                poll_id INTEGER,
+                poll_message_id INTEGER,
+                poll_options INTEGER,
+                poll_consensus_coefficient REAL,
+                poll_stop_date INTEGER,
+                poll_yes_list TEXT,
+                poll_no_list TEXT,
+                change_ctype TEXT,
+                change_mod_action TEXT,
+                change_mod_modid TEXT,
+                change_mod_workshopid TEXT,
+                change_setting_variable TEXT,
+                change_setting_old_value TEXT,
+                change_setting_new_value TEXT,
+                proposer_first_name TEXT,
+                proposer_last_name TEXT,
+                proposer_username TEXT,
+                proposer_id INTEGER
+            )''')
         conn.commit()
         conn.close()
     except Exception as e:
         logger(e, "ERROR")
 
 class Player:
-    def __init__(self, steam_id, username, access, first_time_seen_on, telegram_id=None):
+    def __init__(self, ID, username, banned, accesslevel, firstconnection, lastconnection, steam_id, telegram_id):
+        self.ID = ID
+        self.username = username
+        self.banned = banned
+        self.accesslevel = accesslevel
+        self.firstconnection = firstconnection
+        self.lastconnection = lastconnection
         self.steam_id = steam_id
         self.telegram_id = telegram_id
-        self.username = username
-        self.access = access
-        self.first_time_seen_on = first_time_seen_on
-
     def print_all(self):
         for var_name, var_value in vars(self).items():
             print(f"{var_name}: {var_value}")
@@ -796,14 +849,20 @@ class Player:
 def init_players_table():
     try:
         import sqlite3
-        conn = sqlite3.connect(players_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS players (
-        steam_id INTEGER PRIMARY KEY,
-        telegram_id INTEGER,
-        usernames TEXT,
-        first_time_seen_on INTEGER,
-        access TEXT)''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS players
+            (
+                id INTEGER PRIMARY KEY,
+                username TEXT,
+                banned INTEGER,
+                accesslevel TEXT,
+                firstconnection TEXT,
+                lastconnection TEXT,
+                steam_id INTEGER,
+                telegram_id INTEGER
+            )''')
         conn.commit()
         conn.close()
     except Exception as e:
@@ -821,14 +880,39 @@ class Session:
 def init_sessions_table():
     try:
         import sqlite3
-        conn = sqlite3.connect(sessions_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS sessions (
-        session_id INTEGER PRIMARY KEY,
-        steam_id INTEGER,
-        login INTEGER,
-        logout INTEGER,
-        ip TEXT)''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS sessions
+            (
+                session_id INTEGER PRIMARY KEY,
+                steam_id INTEGER,
+                login INTEGER,
+                logout INTEGER,
+                ip TEXT
+            )''')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger(e, "ERROR")
+
+def init_mfa_table():
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS mfa 
+            (
+                id INTEGER PRIMARY KEY,
+                steam_id INTEGER,
+                telegram_id INTEGER,
+                chat_id INTEGER,
+                message_id INTEGER,
+                confirmed INTEGER,
+                submitted_on INTEGER,
+                pending_removal INTEGER
+            )''')
         conn.commit()
         conn.close()
     except Exception as e:
@@ -839,6 +923,7 @@ if __name__ == '__main__':
         init_reform_table()
         init_players_table()
         init_sessions_table()
+        init_mfa_table()
     except Exception as e:
         logger(e, "ERROR")
 
@@ -846,10 +931,142 @@ if __name__ == '__main__':
 ### DB FUNCTIONS
 ########################################
 
+def sync_with_server_whitelist():
+    try:
+        import sqlite3
+        from datetime import datetime
+        TEMP_DB = os.path.join(THIS_FOLDER, "tmp.db")
+        # Need to copy to another file to open it since it's already open by the game. Also safer to touch just the copy.
+        run_command(f'cp {ZOMBOID_SERVER_DB} {TEMP_DB}')
+        # Let's open the bot DB
+        pztg_db = sqlite3.connect(pztgdb)
+        c = pztg_db.cursor()
+        # And attach the game DB to make use of more efficient sorting functions even if we don't realistically really need it
+        c.execute(f"ATTACH DATABASE '{TEMP_DB}' AS game_server_db")
+        c.execute('''
+            SELECT w.username, w.banned, w.lastconnection, w.steamid, w.accesslevel 
+            FROM game_server_db.whitelist w
+            LEFT JOIN players p ON w.username = p.username AND w.steamid = p.steam_id
+            WHERE p.steam_id IS NULL and w.steamid IS NOT NULL''')
+        missing_entries = c.fetchall()
+        c.execute('''
+            SELECT w.username, w.lastconnection, w.steamid
+            FROM game_server_db.whitelist w
+            LEFT JOIN players p ON w.username = p.username AND w.steamid = p.steam_id
+            WHERE p.lastconnection <> w.lastconnection''')
+        latest_connections = c.fetchall()
+        # Add missing entries to the players table
+        for entry in missing_entries:
+            username, banned, lastconnection, steamid, accesslevel = entry
+            firstconnection = log_timestamp()
+            # Check if there is a corresponding telegramid in the mfa table
+            c.execute("SELECT telegram_id FROM mfa WHERE steam_id = ? AND confirmed = 1", (steamid,))
+            result = c.fetchone()
+            if result:
+                telegramid = result[0]
+            else:
+                telegramid = None
+            # Finally, insert the entry into the players table
+            c.execute('''
+                INSERT INTO players (username, banned, accesslevel, firstconnection, lastconnection, steam_id, telegram_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (username, banned, accesslevel, firstconnection, lastconnection, steamid, telegramid))
+        for entry in latest_connections:
+            username, lastconnection, steamid = entry
+            c.execute('''
+                UPDATE players SET lastconnection = ? WHERE steam_id = ? AND username = ?
+            ''', (lastconnection, steamid, username))
+        # Commit the changes and close the connection
+        pztg_db.commit()
+        pztg_db.close()
+        # And clean by removing the temporary copy
+        rm(TEMP_DB)
+    except Exception as e:
+        logger(e, "ERROR")
+
+def submit_mfa_registration(steam_id, telegram_id, message):
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute('INSERT INTO mfa (steam_id, telegram_id, chat_id, message_id, confirmed, submitted_on) VALUES (?, ?, ?, ?, ?, ?)', (int(steam_id), int(telegram_id), int(message.chat.id), int(message.id), 0, unix_timestamp()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger(e, "ERROR")
+
+def player_set_telegram_id(steam_id, telegram_id):
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute("SELECT * FROM players WHERE steam_id = ?", (int(steam_id),))
+        existing_player = c.fetchone()
+        if existing_player:
+            c.execute("UPDATE players SET telegram_id = ? WHERE steam_id = ?", (int(telegram_id), int(steam_id)))
+            conn.commit()
+            conn.close()
+            return True
+        conn.close()
+        return False
+    except Exception as e:
+        logger(e, "ERROR")
+
+def confirm_mfa_registration(steam_id, telegram_id):
+    try:
+        import sqlite3
+        global MFA
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute(f'UPDATE mfa SET confirmed = 1, pending_removal = 1 WHERE steam_id = {int(steam_id)} AND telegram_id = {int(telegram_id)}')
+        c.execute(f'UPDATE players SET telegram_id = {telegram_id} WHERE steam_id = {steam_id}')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger(e, "ERROR")
+
+def get_mfa_registrants():
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute("SELECT steam_id, telegram_id, chat_id, message_id, confirmed FROM mfa WHERE confirmed = 0 OR pending_removal = 1")
+        results = c.fetchall()
+        MFA = []
+        for steam_id, telegram_id, chat_id, message_id, confirmed in results:
+            MFA.append([steam_id, telegram_id, fake_message(chat_id, message_id), confirmed])
+        conn.close()
+        return MFA
+    except Exception as e:
+        logger(e, "ERROR")
+
+def get_mfa_pending_removals():
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute("SELECT steam_id, telegram_id FROM mfa WHERE pending_removal = 1")
+        results = c.fetchall()
+        conn.close()
+        return results
+    except Exception as e:
+        logger(e, "ERROR")
+
+def terminate_mfa_cycle(steam_id, telegram_id):
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute(f"UPDATE mfa SET pending_removal = 0 WHERE steam_id = {steam_id} AND telegram_id = {telegram_id}")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger(e, "ERROR")
+
 def save_reform(reform):
     try:
         import sqlite3
-        conn = sqlite3.connect(reforms_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
         # Check if the reform already exists in the table
         c.execute('SELECT * FROM reforms WHERE reform_id = ?', (reform.reform_id,))
@@ -873,7 +1090,7 @@ def save_reform(reform):
 def get_player(steam_id):
     try:
         import sqlite3
-        conn = sqlite3.connect(players_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
         c.execute('SELECT * FROM players WHERE steam_id = ?', (int(steam_id),))
         result = c.fetchone()
@@ -888,7 +1105,7 @@ def get_player(steam_id):
 def get_reform(reform_id):
     try:
         import sqlite3
-        conn = sqlite3.connect(reforms_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
         c.execute('SELECT * FROM reforms WHERE reform_id = ?', (int(reform_id),))
         result = c.fetchone()
@@ -903,7 +1120,7 @@ def get_reform(reform_id):
 def get_reform_by_poll_id(poll_id):
     try:
         import sqlite3
-        conn = sqlite3.connect(reforms_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
         c.execute('SELECT * FROM reforms WHERE poll_id = ?', (int(poll_id),))
         result = c.fetchone()
@@ -918,9 +1135,9 @@ def get_reform_by_poll_id(poll_id):
 def get_mod_clone_change(modid, workshopid, action):
     try:
         import sqlite3
-        conn = sqlite3.connect(reforms_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
-        c.execute('SELECT * FROM reforms WHERE change_mod_modid = ? AND change_mod_workshopid = ? AND change_mod_action = ? AND reform_is_active = ?', (modid, workshopid, action, 1))
+        c.execute('SELECT * FROM reforms WHERE change_mod_modid = ? AND change_mod_workshopid = ? AND change_mod_action = ? AND reform_is_active = ?', (modid, int(workshopid), action, 1))
         result = c.fetchone()
         conn.close()
         if result:
@@ -933,7 +1150,7 @@ def get_mod_clone_change(modid, workshopid, action):
 def get_setting_clone_change(variable, new_value):
     try:
         import sqlite3
-        conn = sqlite3.connect(reforms_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
         c.execute('SELECT * FROM reforms WHERE change_setting_variable = ? AND change_setting_new_value = ? AND reform_is_active = ?', (variable, new_value, 1))
         result = c.fetchone()
@@ -945,28 +1162,10 @@ def get_setting_clone_change(variable, new_value):
     except Exception as e:
         logger(e, "ERROR")
 
-def player_set_telegram_id(steam_id, telegram_id):
-    try:
-        import sqlite3
-        conn = sqlite3.connect(players_db)
-        c = conn.cursor()
-        c.execute("SELECT * FROM players WHERE steam_id = ?", (steam_id,))
-        existing_player = c.fetchone()
-        if existing_player:
-            c.execute("UPDATE players SET telegram_id = ? WHERE steam_id = ?", (int(telegram_id), int(steam_id)))
-            conn.commit()
-            conn.close()
-            return True
-        conn.commit()
-        conn.close()
-        return False
-    except Exception as e:
-        logger(e, "ERROR")
-
 def player_get_telegram_id(steam_id):
     try:
         import sqlite3
-        conn = sqlite3.connect(players_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
         c.execute('SELECT telegram_id FROM players WHERE steam_id = ?', (int(steam_id),))
         result = c.fetchone()
@@ -981,9 +1180,9 @@ def player_get_telegram_id(steam_id):
 def user_is_registered(telegram_id):
     try:
         import sqlite3
-        conn = sqlite3.connect(players_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
-        c.execute("SELECT steam_id FROM players WHERE telegram_id=?", (telegram_id,))
+        c.execute("SELECT steam_id FROM mfa WHERE telegram_id=? AND confirmed=?", (int(telegram_id),1))
         steam_id = c.fetchone()
         conn.close()
         return steam_id[0] if steam_id else False
@@ -993,9 +1192,9 @@ def user_is_registered(telegram_id):
 def  player_is_registered(steam_id):
     try:
         import sqlite3
-        conn = sqlite3.connect(players_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
-        c.execute("SELECT telegram_id FROM players WHERE steam_id=?", (int(steam_id),))
+        c.execute("SELECT telegram_id FROM mfa WHERE steam_id=? AND confirmed=?", (int(steam_id),1))
         telegram_id = c.fetchone()
         conn.close()
         return telegram_id[0] if telegram_id else False
@@ -1005,7 +1204,7 @@ def  player_is_registered(steam_id):
 def session_open(steam_id, ip):
     try:
         import sqlite3
-        conn = sqlite3.connect(sessions_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
         c.execute("INSERT INTO sessions (steam_id, login, ip) VALUES (?, ?, ?)", (int(steam_id), unix_timestamp(), ip))
         session_id = c.lastrowid
@@ -1018,32 +1217,12 @@ def session_open(steam_id, ip):
 def session_close(session_id):
     try:
         import sqlite3
-        conn = sqlite3.connect(sessions_db)
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
         c.execute("UPDATE sessions SET logout = ? WHERE session_id = ?", (unix_timestamp(), int(session_id)))
         conn.commit()
         conn.close()
         return True
-    except Exception as e:
-        logger(e, "ERROR")
-
-def upsert_player(steam_id, username, access):
-    try:
-        import sqlite3
-        conn = sqlite3.connect(players_db)
-        c = conn.cursor()
-        c.execute("SELECT * FROM players WHERE steam_id = ?", (int(steam_id),))
-        existing_player = c.fetchone()
-        if existing_player:
-            c.execute('SELECT usernames FROM players WHERE steam_id = ?', (int(steam_id),))
-            usernames = c.fetchone()[0].split(',')
-            if username not in usernames:
-                usernames.append(username)
-                c.execute("UPDATE players SET usernames = ?, access = ? WHERE steam_id = ?", (','.join(map(str, usernames)), access, int(steam_id)))
-        else:
-            c.execute("INSERT INTO players (steam_id, usernames, access, first_time_seen_on) VALUES (?, ?, ?, ?)", (int(steam_id), username, access, unix_timestamp()))
-        conn.commit()
-        conn.close()
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1053,33 +1232,28 @@ def get_player_stats(telegram_id):
 def get_user_activity_info(telegram_id):
     try:
         import sqlite3
-        conn_players = sqlite3.connect(players_db)
-        c_players = conn_players.cursor()
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
 
         # Get steam_id associated with the provided telegram_id
-        c_players.execute("SELECT steam_id, first_time_seen_on FROM players WHERE telegram_id=?", (telegram_id,))
-        steam_id, first_time_seen_on = c_players.fetchone()
+        c.execute("SELECT steam_id, firstconnection FROM players WHERE telegram_id=?", (telegram_id,))
+        steam_id, firstconnection = c.fetchone()
 
         # Get count of logins, total time connected, and average session duration
-        c_sessions = sqlite3.connect(sessions_db).cursor()
-        c_sessions.execute("SELECT COUNT(*), SUM(logout - login), AVG(logout - login) FROM sessions WHERE steam_id=?", (steam_id,))
-        login_count, total_time_connected, avg_session_duration = c_sessions.fetchone()
-
-        # Calculate activity coefficient for the last 7 days
-        # This requires additional calculations
+        c.execute("SELECT COUNT(*), SUM(logout - login), AVG(logout - login) FROM sessions WHERE steam_id=?", (steam_id,))
+        login_count, total_time_connected, avg_session_duration = c.fetchone()
 
         # Get the number of reforms proposed by the user
-        c_reforms = sqlite3.connect(reforms_db).cursor()
-        c_reforms.execute("SELECT COUNT(*) FROM reforms WHERE proposer_id=?", (telegram_id,))
-        proposed_reforms_count = c_reforms.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM reforms WHERE proposer_id=?", (telegram_id,))
+        proposed_reforms_count = c.fetchone()[0]
 
         # Get the number of proposed reforms that got implemented
-        c_reforms.execute("SELECT COUNT(*) FROM reforms WHERE proposer_id=? AND reform_implemented=1", (telegram_id,))
-        implemented_reforms_count = c_reforms.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM reforms WHERE proposer_id=? AND reform_implemented=1", (telegram_id,))
+        implemented_reforms_count = c.fetchone()[0]
 
         # Get the number of times the user voted yes, no, and didn't vote
-        c_reforms.execute("SELECT poll_yes_list, poll_no_list, reform_date FROM reforms")
-        reforms_data = c_reforms.fetchall()
+        c.execute("SELECT poll_yes_list, poll_no_list, reform_date FROM reforms")
+        reforms_data = c.fetchall()
 
         voted_yes_count = 0
         voted_no_count = 0
@@ -1088,7 +1262,7 @@ def get_user_activity_info(telegram_id):
 
         for poll_yes_list, poll_no_list, reform_date in reforms_data:
             # Check if the user could have possibly voted based on their join date
-            if first_time_seen_on <= reform_date:
+            if firstconnection <= reform_date:
                 poll_yes_list = poll_yes_list.split(",") if poll_yes_list else []
                 poll_no_list = poll_no_list.split(",") if poll_no_list else []
                 poll_count += 1
@@ -1101,22 +1275,21 @@ def get_user_activity_info(telegram_id):
                 else:
                     did_not_vote_count += 1
 
-        # Close connections
-        conn_players.close()
-        c_sessions.close()
-        c_reforms.close()
+        # Close connection
+        conn.close()
 
         voted_yes_perc = (voted_yes_count / poll_count * 100) if poll_count != 0 else 0
         voted_no_perc = (voted_no_count / poll_count * 100) if poll_count != 0 else 0
         did_not_vote_perc = (did_not_vote_count / poll_count * 100) if poll_count != 0 else 0
+        reforms_approved_perc = round(implemented_reforms_count/proposed_reforms_count*100) if proposed_reforms_count != 0 else 0
 
         return f'''<b>Login count</b>: {login_count}
-<b>Total time played</b>: {format_time(total_time_connected)}
-<b>Average session</b>: {format_time(avg_session_duration)}
+<b>Total time played</b>: {format_time(total_time_connected, 'm')}
+<b>Average session</b>: {format_time(avg_session_duration, 'm')}
 
 <b>Zombie Killed:</b> {'2'}
 
-<b>Reforms proposed</b>: {proposed_reforms_count} ({round(implemented_reforms_count/proposed_reforms_count*100)}% approved)
+<b>Reforms proposed</b>: {proposed_reforms_count} ({reforms_approved_perc}% approved)
 
 Out of {poll_count} polls, you voted:
 <b>Yes</b>: {voted_yes_count} ({round(voted_yes_perc)}%) - <b>No</b>: {voted_no_count} ({round(voted_no_perc)}%) - <b>Blank</b>: {did_not_vote_count} ({round(did_not_vote_perc)}%)'''
@@ -1167,10 +1340,8 @@ if __name__ == '__main__':
     set_default_cmd='default'
     set_default_msg_helper='Use /default to set the current settings as default settings'
     compare_cmd='diff'
-    compare_desc='Shows differences between current settings and vanilla or default'
-    compare_msg_helper='''Show differences between sets of settings:
-        /'''+compare_cmd+''' vanilla
-        /'''+compare_cmd+' default'
+    compare_desc='Shows differences between current settings and vanilla'
+    compare_msg_helper='Shows variances between current and vanilla'
     restart_cmd='restart'
     restart_confirm_cmd='confirm'
     restart_cancel_cmd='cancel'
@@ -1347,61 +1518,96 @@ if __name__ == '__main__':
     log_key_death = 'replacing dead player'
     log_key_mod_fail = ['ZomboidFileSystem.loadModAndRequired','not found']
 
-### PARSING FUNCTIONS
+########################################
+### MFA RELATED
+########################################
+
+def mfa_naming_convention(telegram_id):
+    return f"MFA{str(telegram_id)}"
+
+def kick_player(username, msg):
+    try:
+        run_command(f"tmux send-keys -t {SERVICE_NAME} 'kickuser {username} -r \"{msg}\"' C-m")
+    except Exception as e:
+        logger(e, "ERROR")
 
 def remove_from_whitelist(steamid, username):
     import sqlite3
     try:
-        TEMP_DB=THIS_FOLDER+'MFAtemp_'+SERVICE_NAME+'.db'
+        TEMP_DB=os.path.join(THIS_FOLDER, 'MFA_whitelist_temp.db')
         run_command(f'cp {ZOMBOID_SERVER_DB} {TEMP_DB}')
         conn = sqlite3.connect(TEMP_DB)
         c = conn.cursor()
         c.execute("DELETE FROM whitelist WHERE steamid = ? AND username = ?", (steamid, username))
         conn.commit()
         conn.close()
-        run_command(f'cp {TEMP_DB} {ZOMBOID_SERVER_DB}')
+        run_command(f'mv {TEMP_DB} {ZOMBOID_SERVER_DB} && chmod 777 {ZOMBOID_SERVER_DB}')
     except Exception as e:
         logger(e, "ERROR")
 
 def remove_from_player_db(steamid, username):
     import sqlite3
     try:
-        TEMP_DB=THIS_FOLDER+'MFAtemp_players.db'
+        TEMP_DB=os.path.join(THIS_FOLDER, 'MFA_players_temp.db')
         run_command(f'cp {ZOMBOID_PLAYER_DB} {TEMP_DB}')
         conn = sqlite3.connect(TEMP_DB)
         c = conn.cursor()
         c.execute("DELETE FROM networkPlayers WHERE steamid = ? AND username = ?", (steamid, username))
         conn.commit()
         conn.close()
-        run_command(f'mv {TEMP_DB} {ZOMBOID_PLAYER_DB}')
+        run_command(f'mv {TEMP_DB} {ZOMBOID_PLAYER_DB} && chmod 777 {ZOMBOID_SERVER_DB}')
+    except Exception as e:
+        logger(e, "ERROR")
+
+def remove_from_pztg_db(steam_id, username):
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute(f"DELETE FROM players WHERE steam_id = {steam_id} AND username = '{username}'")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger(e, "ERROR")
+
+def remove_pending_mfa_accounts_from_game_db():
+    try:
+        pending = get_mfa_pending_removals()
+        if pending:
+            for steam_id, tg_acc in pending:
+                remove_from_whitelist(steam_id, mfa_naming_convention(tg_acc))
+                remove_from_player_db(steam_id, mfa_naming_convention(tg_acc))
+                remove_from_pztg_db(steam_id, mfa_naming_convention(tg_acc))
+                terminate_mfa_cycle(steam_id, tg_acc)
     except Exception as e:
         logger(e, "ERROR")
 
 def multi_fucker_autentication(steam_id, username, login):
     try:
+        MFA = get_mfa_registrants()
         if MFA:
-            for entry in MFA:
-                message, steam_id, verification, telegram_id = entry
-                if username == verification:
-                    if login:
-                        registration = player_set_telegram_id(steam_id, telegram_id)
-                        reply_to(message, "Your game account has been successfully linked.")
-                        return True
-                    else:
-                        remove_from_player_db(steam_id, username)
-                        remove_from_whitelist(steam_id, username)
-                        MFA.pop(MFA.index(entry))
-                        return True
+            for mfa_steam_id, mfa_telegram_id, message, confirmed in MFA:
+                if username == mfa_naming_convention(mfa_telegram_id) and steam_id == mfa_steam_id:
+                    if not confirmed:
+                        MFA.append(username)
+                        confirm_mfa_registration(steam_id, mfa_telegram_id)
+                        msg = f"Your game account has been successfully linked with telegram. The account \"{username}\" will be deleted on next reboot."
+                        reply_to(message, msg)
+                    return True             
         return False
     except Exception as e:
         logger(e, "ERROR")
 
-def player_client_login_event(steam_id, username, ip, access='user'):
+########################################
+### LOGIN/LOGOUT FUNCTIONS
+########################################
+
+def player_client_login_event(steam_id, username, ip, accesslevel='user'):
     try:
         global open_sessions
         if not multi_fucker_autentication(steam_id, username, 1):
             server_chat_message(f"A player connected to the server: {username}")
-            upsert_player(steam_id, username, access)
+            sync_with_server_whitelist()
             session = Session()
             session.steam_id = steam_id
             session.id = session_open(steam_id, ip)
@@ -1409,12 +1615,12 @@ def player_client_login_event(steam_id, username, ip, access='user'):
     except Exception as e:
         logger(e, "ERROR")
         
-def player_client_logout_event(steam_id, username, ip, access='user'):
+def player_client_logout_event(steam_id, username, ip, accesslevel='user'):
     try:
         global open_sessions
         if not multi_fucker_autentication(steam_id, username, 0):
             server_chat_message(f"A player disconnected from the server: {username}")
-            upsert_player(steam_id, username, access)
+            sync_with_server_whitelist()
             if open_sessions:
                 for session in open_sessions:
                     if session.steam_id == steam_id:
@@ -1424,6 +1630,10 @@ def player_client_logout_event(steam_id, username, ip, access='user'):
                 logger("No open sessions, yet a player logged out.", "ERROR")
     except Exception as e:
         logger(e, "ERROR")
+
+########################################
+### PARSING FUNCTIONS
+########################################
 
 def alert_bot(keyword, line):
     try:
@@ -1440,7 +1650,7 @@ def alert_bot(keyword, line):
             match = re.search(mod_fail_re_pattern, line)
             server_chat_message(f"Mod \"{match.group(1)}\" failed to load while starting the server")
         elif command_flag and keyword == log_key_cmd:
-            if '"quit"' not in line and '"save"' not in line:
+            if '"quit"' not in line and '"save"' not in line and 'kickuser MFA' not in line:
                 index = line.find('command entered')
                 server_chat_message(line[index:].capitalize())
         elif join_flag and keyword == log_key_client_init:
@@ -1448,7 +1658,7 @@ def alert_bot(keyword, line):
             if match:
                 ip = match.group(1)
                 steam_id = int(match.group(2))
-                access = match.group(3)
+                accesslevel = match.group(3)
                 username = match.group(4)
                 player_client_login_event(steam_id, username, ip)
         elif left_flag and keyword == log_key_client_logout:
@@ -1456,7 +1666,7 @@ def alert_bot(keyword, line):
             if match:
                 ip = match.group(1)
                 steam_id = int(match.group(2))
-                access = match.group(3)
+                accesslevel = match.group(3)
                 username = match.group(4)
                 player_client_logout_event(steam_id, username, ip)
     except Exception as e:
@@ -1465,10 +1675,11 @@ def alert_bot(keyword, line):
 def monitor_log(filename=SERVICE_LOG, keywords=[log_key_start, log_key_stop, log_key_client_init, log_key_client_logout, log_key_cmd, log_key_mod_fail]):
     try:
         import subprocess
+        run_command(f"> {filename}")
         tail_process = subprocess.Popen(['tail', '-f', filename], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         for line in tail_process.stdout:
             # Process each line as it is received
-            for keyword in keywords: 
+            for keyword in keywords:
                 if isinstance(keyword, str):
                     if keyword in line:
                         alert_bot(keyword, line)
@@ -1541,9 +1752,7 @@ def regenerate_vanilla_settings():
         global vanilla_started_event
         global vanilla_exit_event
         global vanilla_settings_event
-        def rm(path):
-            if os.path.exists(path):
-                return run_command("rm "+path)
+        vanilla_settings = 425
         rm(VANILLA_SERVERINI_PATH)
         rm(VANILLA_SANDBOXVARS_PATH)
         start_vanilla_server()
@@ -1574,47 +1783,30 @@ def regenerate_vanilla_settings():
                     print(w)
                     logger(w, "WARNING")
     except Exception as e:
+        vanilla_settings = 500
         logger(e, "ERROR")
 
 if __name__ == '__main__':
-    vanilla_settings = 404
-    vanilla_started_event = threading.Event()
-    vanilla_exit_event = threading.Event()
-    vanilla_settings_event = threading.Event()
-    regenerate_setting_thread = threading.Thread(target=regenerate_vanilla_settings)
-    if AUTOUPDATE_VANILLA_SETTINGS_ON_START:
-        regenerate_setting_thread.start()
-    else:
+    try:
         vanilla_settings = get_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS)
-        if not vanilla_settings:
-            vanilla_settings = 404 
+        vanilla_started_event = threading.Event()
+        vanilla_exit_event = threading.Event()
+        vanilla_settings_event = threading.Event()
+        regenerate_setting_thread = threading.Thread(target=regenerate_vanilla_settings)
+        if AUTOUPDATE_VANILLA_SETTINGS_ON_START == 1:
+            regenerate_setting_thread.start()
+        elif AUTOUPDATE_VANILLA_SETTINGS_ON_START == 2:
+            if get_setting('Mods').value != get_setting('Mods', source_settings=vanilla_settings).value or not vanilla_settings:
+                regenerate_setting_thread.start()
+        else:
+            if not vanilla_settings:
+                vanilla_settings = 404
+    except Exception as e:
+        logger(e, "ERROR")
 
 ########################################################################################################################
 ### POLLING MANAGER & MONITOR
 ########################################################################################################################
-
-def fake_poll_message(reform):
-    try:
-        class fakemessage:
-            def __init__(self, chat_id, message_id):
-                self.chat_id = chat_id
-                self.message_id = message_id
-            @property
-            def chat(self):
-                return fakechat(self.chat_id)
-            @property
-            def id(self):
-                return self.message_id
-        class fakechat:
-            def __init__(self, chat_id):
-                self.chat_id = chat_id
-            @property
-            def id(self):
-                return self.chat_id
-        # Eat your broccoli, bitch
-        return fakemessage(chat_id=reform.reform_chat_id, message_id=reform.poll_message_id)
-    except Exception as e:
-        logger(e, "ERROR")
 
 def create_poll(chat_id, description, options, anonymous=False, multiple_answers=False):
     try:
@@ -1641,7 +1833,7 @@ def deny_change(reform=None, poll_id=None):
         reform.reform_implemented = 0
         save_reform(reform)
         #reform.print_all()
-        reply_to(fake_poll_message(reform), msg_change_rejected)
+        reply_to(fake_message(reform.reform_chat_id, reform.poll_message_id), msg_change_rejected)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1662,7 +1854,7 @@ def implement_change(reform=None, poll_id=None):
         reform.reform_implemented = 1
         save_reform(reform)
         #reform.print_all()
-        reply_to(fake_poll_message(reform), msg_change_implemented)
+        reply_to(fake_message(reform.reform_chat_id, reform.poll_message_id), msg_change_implemented)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1817,7 +2009,30 @@ def create_reform(message, ctype, change):
             #new_reform.print_all()
             save_reform(new_reform)
         else:
-            reply_to(fake_poll_message(clone), "This change has been already proposed and is under trial process.")
+            reply_to(fake_message(clone.reform_chat_id, clone.poll_message_id), "This change has been already proposed and is under trial process.")
+    except Exception as e:
+        logger(e, "ERROR")
+
+########################################################################################################################
+### MAIN - LAUNCH SERVER
+########################################################################################################################
+
+def start_game_server():
+    try:
+        remove_pending_mfa_accounts_from_game_db()
+        if run_command(f"{SERVICE_MANAGER} --start"):
+            logger(f"Game server was started on tmux session \"{SERVICE_MANAGER}\"", "INFO")
+    except Exception as e:
+        logger(e, "ERROR")
+
+if __name__ == '__main__':
+    try:
+        if not tmux_session_is_still_open(SERVICE_NAME):
+            import threading
+            pz_game_server_thread = threading.Thread(target=start_game_server)
+            pz_game_server_thread.start()
+        else:
+            logger(f"The game server tmux session (\"{SERVICE_NAME}\") is already/still up. I won't launch another instance.", "INFO")
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1862,9 +2077,9 @@ if __name__ == '__main__':
                     for chunk in text_chunks:
                         reply_to(message, chunk, parse_mode='HTML')
                     return True
-                if not vanilla_settings == 404:
+                if vanilla_settings not in [500, 404, 425]:
                     send_diff()
-                else:
+                elif vanilla_settings == 425:
                     reply_to(message, "Vanilla settings are being generated. Please wait.")
                     import threading
                     def send_diff_when_ready():
@@ -1872,6 +2087,10 @@ if __name__ == '__main__':
                         send_diff()
                     send_diff_later = threading.Thread(target=send_diff_when_ready)
                     send_diff_later.start()
+                elif vanilla_settings == 500:
+                    reply_to(message, "A error prevented vanilla settings generation.")
+                elif vanilla_settings == 404:
+                    reply_to(message, "Vanilla settings were not found. Provide the setting file or enable autogeneration.")
             else:
                 reply_to(message, compare_msg_helper)
         # SET SETTING DEFAULT
@@ -1908,7 +2127,6 @@ if __name__ == '__main__':
             else:
                 reply_to(message, stats_msg_helper, disable_web_page_preview=True)
         # REGISTER
-        MFA=[]
         @bot.message_handler(commands=[register_cmd])
         def register_command(message):
             command = message.text.split()
@@ -1916,8 +2134,8 @@ if __name__ == '__main__':
                 steam_id = valid_steam_id(command[1])
                 if steam_id:
                     if get_player(steam_id):
-                        reply_to(message, f"Please connect to PZserver before next reboot with an account called 'MFA{message.from_user.id}' to complete the process.")
-                        MFA.append([message, int(steam_id), 'MFA'+str(message.from_user.id), message.from_user.id])
+                        reply_to(message, f"Please connect to PZserver with this username: 'MFA{message.from_user.id}' to complete the process.")
+                        submit_mfa_registration(steam_id, message.from_user.id, message)
                     else:
                         reply_to(message, f"This steam ID is not associated to any player of the server yet.")
                 else:
