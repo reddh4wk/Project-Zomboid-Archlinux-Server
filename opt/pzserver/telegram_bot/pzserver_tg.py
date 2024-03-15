@@ -167,6 +167,13 @@ def unix_timestamp_to_log_timestamp(unix_timestamp):
     except Exception as e:
         logger(e, "ERROR")
 
+def log_timestamp_to_unix_timestamp(log_timestamp):
+    try:
+        from datetime import datetime
+        return int(datetime.strptime(log_timestamp, '%Y-%m-%d %H:%M:%S').timestamp())
+    except Exception as e:
+        logger(e, "ERROR")
+
 def run_command(command):
     try:
         if DEBUG_MODE:
@@ -337,6 +344,58 @@ if __name__ == '__main__':
             else:
                 print("Another instance of the script is already running.")
                 sys.exit(1)
+    except Exception as e:
+        logger(e, "ERROR")
+
+########################################################################################################################
+### INITIALIZE BOT
+########################################################################################################################
+
+if __name__ == '__main__':
+    try:
+        import telebot
+        bot = telebot.TeleBot(TOKEN)
+    except Exception as e:
+        logger(e, "ERROR")
+
+########################################################################################################################
+### BOT RELATED USEFUL TOOLS
+########################################################################################################################
+
+def server_chat_message(text, disable_notification=True, disable_web_page_preview=False, parse_mode='Markdown'):
+    try:
+        if not DEBUG_MODE:
+            for each in SERVER_CHATS:
+                bot.send_message(each, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
+        else:
+            bot.send_message(DEBUG_CHAT[0], text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
+    except Exception as e:
+        logger(e, "ERROR")
+
+def reply_to(message, text, disable_notification=True, disable_web_page_preview=False, parse_mode='Markdown'):
+    try:
+        bot.reply_to(message, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
+    except Exception as e:
+        logger(e, "ERROR")
+
+def member_is_admin(message):
+    try:
+        member = bot.get_chat_member(message.chat.id, message.from_user.id)
+        if member.status in ['creator','administrator']:
+            return True
+        else:
+            reply_to(message, "This command requires administrator-level or superior priviledges.", disable_notification=True)
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
+
+def member_is_dev(message):
+    try:
+        if message.from_user.id in DEVS:
+            return True
+        else:
+            reply_to(message, msg_only_master)
+            return False
     except Exception as e:
         logger(e, "ERROR")
 
@@ -918,18 +977,66 @@ def init_mfa_table():
     except Exception as e:
         logger(e, "ERROR")
 
+def init_pending_queries_table():
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS pending_queries 
+            (
+                id INTEGER PRIMARY KEY,
+                query_type TEXT,
+                db_path TEXT,
+                query TEXT,
+                pending INTEGER,
+                chat_id INTEGER,
+                message_id INTEGER
+            )''')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger(e, "ERROR")
+
 if __name__ == '__main__':
     try:
         init_reform_table()
         init_players_table()
         init_sessions_table()
         init_mfa_table()
+        init_pending_queries_table()
     except Exception as e:
         logger(e, "ERROR")
 
 ########################################
 ### DB FUNCTIONS
 ########################################
+
+def get_pending_rename_data(get_fake_message=False):
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute("SELECT id, query, chat_id, message_id FROM pending_queries WHERE query_type = 'rename' AND pending = 1")
+        pending = c.fetchall()
+        if pending:
+            import re
+            data = []
+            pattern = r"UPDATE \w+ SET username = '([^']+)' WHERE username = '([^']+)' AND steam_id = (\d+)"
+            for ID, query, chat_id, message_id in pending:
+                match = re.match(pattern, query)
+                if match:
+                    new_username = match.group(1)
+                    old_username = match.group(2)
+                    steam_id = int(match.group(3))
+                    if not get_fake_message:
+                        data.append([ID, old_username, new_username, steam_id])
+                    else:
+                        data.append([ID, old_username, new_username, steam_id, fake_message(chat_id, message_id)])
+            return data
+        conn.close()
+    except Exception as e:
+        logger(e, "ERROR")
 
 def sync_with_server_whitelist():
     try:
@@ -976,11 +1083,76 @@ def sync_with_server_whitelist():
             c.execute('''
                 UPDATE players SET lastconnection = ? WHERE steam_id = ? AND username = ?
             ''', (lastconnection, steamid, username))
+        # Check if there's any conflict between a new username and an existing pending rename request
+        c.execute('SELECT username FROM players')
+        player_usernames = c.fetchall()
+        pending = get_pending_rename_data(get_fake_message=True)
+        if pending:
+            for ID, pending_old_username, pending_new_username, pending_steam_id, fake_message in pending:
+                if any(pending_new_username == username for username in player_usernames):
+                    c.execute("DELETE FROM pending_queries WHERE id = ?", (ID,))
+                    reply_to(fake_message, "Another user logged in with the username you wanted to use before reboot. Request canceled.")
         # Commit the changes and close the connection
         pztg_db.commit()
         pztg_db.close()
         # And clean by removing the temporary copy
         rm(TEMP_DB)
+    except Exception as e:
+        logger(e, "ERROR")
+
+def add_to_pending_queries(query_type, db_path, query, chat_id, message_id):
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute("INSERT INTO pending_queries (query_type, db_path, query, pending, chat_id, message_id) VALUES (?, ?, ?, 1, ?, ?)", (query_type, db_path, query, chat_id, message_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger(e, "ERROR")
+
+def execute_query(db_path, query):
+    try:
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute(query)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger(e, "ERROR")    
+
+def run_pending_queries():
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute("SELECT id, db_path, query FROM pending_queries WHERE pending = 1 ")
+        queries = c.fetchall()
+        for ID, db_path, query, query_type in queries:
+            execute_query(db_path, query)
+            c.execute("UPDATE pending_queries SET pending = 0 WHERE ID = ?", (ID,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger(e, "ERROR")   
+
+def delete_pending_rename(username, steam_id):
+    try:
+        pending = get_pending_rename_data()
+        if get_pending_rename_data():
+            import sqlite3
+            conn = sqlite3.connect(pztgdb)
+            c = conn.cursor()
+            for ID, pending_old_username, pending_new_username, pending_steam_id in pending:
+                if pending_old_username == username and pending_steam_id == steam_id:
+                    c.execute("DELETE FROM pending_queries WHERE id = ?", (ID,))
+                    deleted = True
+            conn.commit()
+            conn.close()
+            return deleted
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1012,7 +1184,7 @@ def player_set_telegram_id(steam_id, telegram_id):
     except Exception as e:
         logger(e, "ERROR")
 
-def confirm_mfa_registration(steam_id, telegram_id):
+def confirm_mfa_registration(steam_id, username, telegram_id):
     try:
         import sqlite3
         global MFA
@@ -1022,6 +1194,11 @@ def confirm_mfa_registration(steam_id, telegram_id):
         c.execute(f'UPDATE players SET telegram_id = {telegram_id} WHERE steam_id = {steam_id}')
         conn.commit()
         conn.close()
+        pending_query_type = 'mfa'
+        add_to_pending_queries(pending_query_type, ZOMBOID_SERVER_DB, "DELETE FROM whitelist WHERE steam_id = ? AND username = ?", (steam_id, username))
+        add_to_pending_queries(pending_query_type, ZOMBOID_PLAYER_DB, "DELETE FROM networkPlayers WHERE steam_id = ? AND username = ?", (steam_id, username))
+        add_to_pending_queries(pending_query_type, pztgdb, "DELETE FROM players WHERE steam_id = ? AND username = ?", (steam_id, username))
+        add_to_pending_queries(pending_query_type, pztgdb, "UPDATE mfa SET pending_removal = 0 WHERE steam_id = ? AND telegram_id = ?", (steam_id, telegram_id))
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1037,29 +1214,6 @@ def get_mfa_registrants():
             MFA.append([steam_id, telegram_id, fake_message(chat_id, message_id), confirmed])
         conn.close()
         return MFA
-    except Exception as e:
-        logger(e, "ERROR")
-
-def get_mfa_pending_removals():
-    try:
-        import sqlite3
-        conn = sqlite3.connect(pztgdb)
-        c = conn.cursor()
-        c.execute("SELECT steam_id, telegram_id FROM mfa WHERE pending_removal = 1")
-        results = c.fetchall()
-        conn.close()
-        return results
-    except Exception as e:
-        logger(e, "ERROR")
-
-def terminate_mfa_cycle(steam_id, telegram_id):
-    try:
-        import sqlite3
-        conn = sqlite3.connect(pztgdb)
-        c = conn.cursor()
-        c.execute(f"UPDATE mfa SET pending_removal = 0 WHERE steam_id = {steam_id} AND telegram_id = {telegram_id}")
-        conn.commit()
-        conn.close()
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1099,6 +1253,18 @@ def get_player(steam_id):
             return Player(*result)
         else:
             return None
+    except Exception as e:
+        logger(e, "ERROR")
+
+def get_player_list():
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute('SELECT username FROM players')
+        result = c.fetchall()
+        conn.close()
+        return result
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1238,6 +1404,7 @@ def get_user_activity_info(telegram_id):
         # Get steam_id associated with the provided telegram_id
         c.execute("SELECT steam_id, firstconnection FROM players WHERE telegram_id=?", (telegram_id,))
         steam_id, firstconnection = c.fetchone()
+        firstconnection = log_timestamp_to_unix_timestamp(firstconnection)
 
         # Get count of logins, total time connected, and average session duration
         c.execute("SELECT COUNT(*), SUM(logout - login), AVG(logout - login) FROM sessions WHERE steam_id=?", (steam_id,))
@@ -1325,7 +1492,7 @@ def add_cmd_bulk(command_list, cmd_list):
 def init_commands():
     try:
         command_list = []
-        return add_cmd_bulk(command_list, [[start_cmd,start_desc],[restart_cmd,restart_desc],[status_cmd,status_desc],[stats_cmd,stats_desc],[compare_cmd,compare_desc],[mod_cmd,mod_desc],[setting_cmd,setting_desc],[register_cmd,register_desc],[help_cmd,help_desc]])
+        return add_cmd_bulk(command_list, [[start_cmd,start_desc],[restart_cmd,restart_desc],[status_cmd,status_desc],[stats_cmd,stats_desc],[compare_cmd,compare_desc],[mod_cmd,mod_desc],[setting_cmd,setting_desc],[rename_cmd,rename_desc],[register_cmd,register_desc],[help_cmd,help_desc]])
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1365,6 +1532,10 @@ if __name__ == '__main__':
     setting_msg_helper='''To use '''+setting_cmd+''' command please use:
         /'''+setting_cmd+''' get <parameter>
         /'''+setting_cmd+''' set <parameter> <value>'''
+    rename_cmd='rename'
+    rename_desc='Renames a selected character in game'
+    rename_msg_helper='''To use '''+rename_cmd+''' command please use (use double quotes):
+        /'''+rename_cmd+''' "<old username>" "<new username>"'''
     register_cmd='register'
     register_desc='Link the game account with your telegram account'
     register_msg_helper='''To link your game account and use /'''+stats_cmd+''' please use:
@@ -1377,7 +1548,7 @@ https://help.steampowered.com/en/faqs/view/2816-BE67-5B69-0FEC'''
     help_msg='List of the commands:\n/'+help_cmd+': '+help_desc+'''
 /'''+restart_cmd+': '+restart_desc+'''
 /'''+status_cmd+': '+status_desc+'''
-/'''+compare_cmd+': '+compare_msg_helper+'\n'+mod_msg_helper+'\n'+setting_msg_helper+'\n'+stats_msg_helper+'\n'+register_msg_helper
+/'''+compare_cmd+': '+compare_msg_helper+'\n'+mod_msg_helper+'\n'+setting_msg_helper+'\n'+stats_msg_helper+'\n'+rename_msg_helper+'\n'+register_msg_helper
 
     ### OTHER MESSAGES
 
@@ -1392,7 +1563,17 @@ https://help.steampowered.com/en/faqs/view/2816-BE67-5B69-0FEC'''
     msg_only_master = "Only my master can use this. You have no power here."
     msg_change_implemented = "This change has been implemented."
     msg_change_rejected = "This change has been rejected."
-    
+
+### INITIALIZE BOT COMMANDS
+
+if __name__ == '__main__':
+    try:
+        commands = init_commands()
+        if commands:
+            bot.set_my_commands(commands)
+    except Exception as e:
+        logger(e, "ERROR")
+ 
 ### COMMANDS - RESTART DOUBLE CHECK - no database, just memory
 
 global_restart_requests = []
@@ -1430,61 +1611,6 @@ def clear_restart(user):
         if removed:
             return True
         else:
-            return False
-    except Exception as e:
-        logger(e, "ERROR")
-
-########################################################################################################################
-### INITIALIZE BOT
-########################################################################################################################
-
-if __name__ == '__main__':
-    try:
-        import telebot
-        bot = telebot.TeleBot(TOKEN)
-        commands = init_commands()
-        if commands:
-            bot.set_my_commands(commands)
-    except Exception as e:
-        logger(e, "ERROR")
-
-########################################################################################################################
-### BOT RELATED USEFUL TOOLS
-########################################################################################################################
-
-def server_chat_message(text, disable_notification=True, disable_web_page_preview=False, parse_mode='Markdown'):
-    try:
-        if not DEBUG_MODE:
-            for each in SERVER_CHATS:
-                bot.send_message(each, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
-        else:
-            bot.send_message(DEBUG_CHAT[0], text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
-    except Exception as e:
-        logger(e, "ERROR")
-
-def reply_to(message, text, disable_notification=True, disable_web_page_preview=False, parse_mode='Markdown'):
-    try:
-        bot.reply_to(message, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
-    except Exception as e:
-        logger(e, "ERROR")
-
-def member_is_admin(message):
-    try:
-        member = bot.get_chat_member(message.chat.id, message.from_user.id)
-        if member.status in ['creator','administrator']:
-            return True
-        else:
-            reply_to(message, "This command requires administrator-level or superior priviledges.", disable_notification=True)
-            return False
-    except Exception as e:
-        logger(e, "ERROR")
-
-def member_is_dev(message):
-    try:
-        if message.from_user.id in DEVS:
-            return True
-        else:
-            reply_to(message, msg_only_master)
             return False
     except Exception as e:
         logger(e, "ERROR")
@@ -1531,57 +1657,6 @@ def kick_player(username, msg):
     except Exception as e:
         logger(e, "ERROR")
 
-def remove_from_whitelist(steamid, username):
-    import sqlite3
-    try:
-        TEMP_DB=os.path.join(THIS_FOLDER, 'MFA_whitelist_temp.db')
-        run_command(f'cp {ZOMBOID_SERVER_DB} {TEMP_DB}')
-        conn = sqlite3.connect(TEMP_DB)
-        c = conn.cursor()
-        c.execute("DELETE FROM whitelist WHERE steamid = ? AND username = ?", (steamid, username))
-        conn.commit()
-        conn.close()
-        run_command(f'mv {TEMP_DB} {ZOMBOID_SERVER_DB} && chmod 777 {ZOMBOID_SERVER_DB}')
-    except Exception as e:
-        logger(e, "ERROR")
-
-def remove_from_player_db(steamid, username):
-    import sqlite3
-    try:
-        TEMP_DB=os.path.join(THIS_FOLDER, 'MFA_players_temp.db')
-        run_command(f'cp {ZOMBOID_PLAYER_DB} {TEMP_DB}')
-        conn = sqlite3.connect(TEMP_DB)
-        c = conn.cursor()
-        c.execute("DELETE FROM networkPlayers WHERE steamid = ? AND username = ?", (steamid, username))
-        conn.commit()
-        conn.close()
-        run_command(f'mv {TEMP_DB} {ZOMBOID_PLAYER_DB} && chmod 777 {ZOMBOID_SERVER_DB}')
-    except Exception as e:
-        logger(e, "ERROR")
-
-def remove_from_pztg_db(steam_id, username):
-    try:
-        import sqlite3
-        conn = sqlite3.connect(pztgdb)
-        c = conn.cursor()
-        c.execute(f"DELETE FROM players WHERE steam_id = {steam_id} AND username = '{username}'")
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger(e, "ERROR")
-
-def remove_pending_mfa_accounts_from_game_db():
-    try:
-        pending = get_mfa_pending_removals()
-        if pending:
-            for steam_id, tg_acc in pending:
-                remove_from_whitelist(steam_id, mfa_naming_convention(tg_acc))
-                remove_from_player_db(steam_id, mfa_naming_convention(tg_acc))
-                remove_from_pztg_db(steam_id, mfa_naming_convention(tg_acc))
-                terminate_mfa_cycle(steam_id, tg_acc)
-    except Exception as e:
-        logger(e, "ERROR")
-
 def multi_fucker_autentication(steam_id, username, login):
     try:
         MFA = get_mfa_registrants()
@@ -1590,7 +1665,7 @@ def multi_fucker_autentication(steam_id, username, login):
                 if username == mfa_naming_convention(mfa_telegram_id) and steam_id == mfa_steam_id:
                     if not confirmed:
                         MFA.append(username)
-                        confirm_mfa_registration(steam_id, mfa_telegram_id)
+                        confirm_mfa_registration(steam_id, username, mfa_telegram_id)
                         msg = f"Your game account has been successfully linked with telegram. The account \"{username}\" will be deleted on next reboot."
                         reply_to(message, msg)
                     return True             
@@ -2019,7 +2094,7 @@ def create_reform(message, ctype, change):
 
 def start_game_server():
     try:
-        remove_pending_mfa_accounts_from_game_db()
+        run_pending_queries()
         if run_command(f"{SERVICE_MANAGER} --start"):
             logger(f"Game server was started on tmux session \"{SERVICE_MANAGER}\"", "INFO")
     except Exception as e:
@@ -2142,6 +2217,61 @@ if __name__ == '__main__':
                     reply_to(message, f"This is not a valid steam ID.")
             else:
                 reply_to(message, register_msg_helper, disable_web_page_preview=True)
+        # RENAME
+        @bot.message_handler(commands=[rename_cmd])
+        def rename_command(message):
+            def schedule_rename(new, old, steam_id):
+                def rename_query(table, new, old, steam_id):
+                    return f"UPDATE {table} SET username = '{new}' WHERE username = '{old}' AND steam_id = {steam_id}"
+                pending_query_type = 'rename'
+                updated = delete_pending_rename(old, steam_id)
+                add_to_pending_queries(pending_query_type, ZOMBOID_SERVER_DB, rename_query('whitelist', new, old, steam_id), message.chat.id, message.id)
+                add_to_pending_queries(pending_query_type, ZOMBOID_PLAYER_DB, rename_query('networkPlayers', new, old, steam_id), message.chat.id, message.id)
+                add_to_pending_queries(pending_query_type, pztgdb, rename_query('players', new, old, steam_id), message.chat.id, message.id)
+                msg = f"Character \"{old}\" will be renamed to \"{new}\" on next reboot unless a new player joins with this username before then."
+                if not updated:
+                    reply_to(message, msg)
+                else:
+                    reply_to(message, f"{msg} Previous change has been canceled.")
+            steam_id = user_is_registered(message.from_user.id)
+            if steam_id:
+                import re
+                usernames = re.findall(r'"([^"]+)"', message.text)
+                forbidden_chars = ['/','?','"','$',"'",'.',';',',']
+                if len(usernames) == 2:
+                    old  = usernames[0]
+                    new = usernames[1]
+                    if all(len(username)< 20 for username in usernames):
+                        if not any(forbidden in username for username in usernames for forbidden in forbidden_chars):
+                            if new not in get_player_list():
+                                pending = get_pending_rename_data()
+                                if not pending:
+                                    schedule_rename(new, old, steam_id)
+                                else:
+                                    you_are_a_fucker = you_are_late = its_your_lucky_day = False
+                                    for ID, old_username, new_username, steam_id in pending:
+                                        if new == new_username and old == old_username:
+                                            you_are_a_fucker = True
+                                        elif new == new_username and old != old_username:
+                                            you_are_late = True
+                                        else:
+                                            its_your_lucky_day = True
+                                    if its_your_lucky_day:
+                                        schedule_rename(new, old, steam_id)
+                                    elif you_are_a_fucker:
+                                        reply_to(message, "This request has been already recorded, but it won't be implemented until next reboot.")
+                                    elif you_are_late:
+                                        reply_to(message, "Another player already submitted a request for this name change before you.")
+                            else:
+                                reply_to(message, "Character name cannot be the same as one of an existing player.")
+                        else:
+                            reply_to(message, "Character names cannot include these characters:\n/ ? \" $ ' . , ;")
+                    else:
+                        reply_to(message, "The maximum lenght of a username is 20 characters")
+                else:
+                    reply_to(message, rename_msg_helper)
+            else:
+                reply_to(message, register_msg_helper)                                        
         # RESTART
         @bot.message_handler(commands=[restart_cmd])
         def restart_command(message):
