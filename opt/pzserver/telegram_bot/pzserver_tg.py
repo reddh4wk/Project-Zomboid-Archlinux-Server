@@ -43,7 +43,7 @@
 # If the program does terminal interaction, make it output a short notice like this when it starts in an interactive mode:
 
 # PZserver TG Module - Copyright (C) 2023 Damiano Meda
-# This program comes with ABSOLUTELY NO WARRANTY; This is free software, and you are welcome to redistribute it under certain conditions. Contact me at damiano.meda@gmail.com for more info.
+# This program comes with ABSOLUTELY NO WARRANTY; This is free software, and you are welcome to redistribute it under certain conditions. Contact me at damiano.meda@gmail.com if you want to do so.
 
 ########################################
 ### FUNDAMENTAL CONSTANTS
@@ -51,6 +51,7 @@
 
 import os
 import sys
+import platform
 
 if __name__ == '__main__':
     if '--debug' in sys.argv:
@@ -63,9 +64,10 @@ if __name__ == '__main__':
     FILENAME = os.path.basename(__file__)
     BASENAME = os.path.splitext(FILENAME)[0]
     THIS_FOLDER = os.path.abspath(os.path.dirname(__file__))
+    THIS_LOG_FILE = os.path.join(THIS_FOLDER, BASENAME+'.log')
     SERVICE_FOLDER = os.path.abspath(os.path.join(THIS_FOLDER, os.pardir))
     SERVICE_NAME = os.path.basename(SERVICE_FOLDER) # Please put the server in a folder with a name different form "vanilla" or "default"
-    SERVICE_LOG = os.path.join('/opt/', SERVICE_NAME, SERVICE_NAME+'.log')
+    SERVICE_LOG = os.path.join(THIS_FOLDER, SERVICE_NAME+'.log')
     SERVICE_MANAGER = os.path.join(SERVICE_FOLDER, SERVICE_NAME+"_manager.sh")
     HOME_FOLDER = os.path.expanduser("~")
     ZOMBOID_FOLDER=os.path.join(HOME_FOLDER, 'Zomboid')
@@ -89,10 +91,10 @@ if __name__ == '__main__':
     DEFAULT_SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "default_SandboxVars.lua")
     
     # TELEGRAM STUFF
-    SERVER_CHATS=[] #Production
-    DEBUG_CHAT = [] #Test
-    TOKEN = '' # Telegram Bot API TOKEN
-    DEVS=[] #Your telegram ID. It will allow you to force changes.
+    SERVER_CHATS=[-1002033569385] #Production
+    DEBUG_CHAT = [-4167198763] #Test
+    TOKEN = '6353909839:AAEQRzoSX9pXCL0sCtRUiw0aWW4via9bgzU' # Telegram Bot API TOKEN
+    DEVS=[45386832] #Your telegram ID. It will allow you to force changes.
 
 ########################################################################################################################
 ### INFORMATION FOR THE LOG FILE
@@ -102,11 +104,7 @@ def log_timestamp():
     from datetime import datetime
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-def log_file():
-    import os
-    return os.path.join(THIS_FOLDER, BASENAME+'.log')
-
-def logger(message, msg_type, log_file=log_file()):
+def logger(message, msg_type, log_file=THIS_LOG_FILE):
     import os
     import traceback
     with open(log_file, 'a') as f:
@@ -123,7 +121,7 @@ def logger(message, msg_type, log_file=log_file()):
                     print(msg_body)
                 f.write(msg_body+"\n")
 
-def log_emendazio(max_rows=1000, buffer=300, log_file=log_file()):
+def log_emendazio(max_rows=1000, buffer=300, log_file=THIS_LOG_FILE):
     try:
         with open(log_file, 'r') as f:
                 lines = f.readlines()
@@ -174,10 +172,11 @@ def log_timestamp_to_unix_timestamp(log_timestamp):
     except Exception as e:
         logger(e, "ERROR")
 
-def run_command(command):
+def run_command(command, log=True):
     try:
         if DEBUG_MODE:
-            print(f"[{log_timestamp()}][INFO] BASH command issued: {command}")
+            if log:
+                logger(f"#!/bin/bash: {command}", "DEBUG")
         import subprocess
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         output, error = process.communicate()
@@ -362,6 +361,13 @@ if __name__ == '__main__':
 ### BOT RELATED USEFUL TOOLS
 ########################################################################################################################
 
+def cheat_alert(text, disable_notification=True, disable_web_page_preview=False, parse_mode='Markdown'):
+    try:
+        for each in SERVER_CHATS:
+            bot.send_message(each, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
+    except Exception as e:
+        logger(e, "ERROR")
+
 def server_chat_message(text, disable_notification=True, disable_web_page_preview=False, parse_mode='Markdown'):
     try:
         if not DEBUG_MODE:
@@ -396,6 +402,27 @@ def member_is_dev(message):
         else:
             reply_to(message, msg_only_master)
             return False
+    except Exception as e:
+        logger(e, "ERROR")
+
+def split_msg_in_chunks(text, telegram_msg_max_lenght=4096):
+    try:
+        chunks = []
+        current_text = ""
+        if text:
+            if isinstance(text, str):
+                for line in text.splitlines():
+                    if len(current_text) + len(line) > telegram_msg_max_lenght:
+                        chunks.append(current_text)
+                        current_text = ""
+                    current_text += line+"\n"
+                if current_text:
+                    chunks.append(current_text)
+                return chunks
+            else:
+                return ["(ಠ ∩ಠ)"]
+        else:
+            return ["(ಠ ∩ಠ)"]
     except Exception as e:
         logger(e, "ERROR")
 
@@ -509,20 +536,14 @@ def compare_settings(settings_to_show, settings_as_reference, as_text=False, con
                 # If you want to collect also settings related to mods
                 missing_in_reference.append((var_name, ref_var_content.value))
         if as_text:
-            text_chunks = []
-            current_text = ""
+            text_differences = ""
             for var_name, show_var_content, ref_var_content in differences:
                 if not console:
                     line = f"<b>{var_name}</b>: {show_var_content.value} | {ref_var_content.value}\n"
                 else:
                     line = f"[{show_var_content.basename}] {var_name}: {show_var_content.value} [{ref_var_content.basename}: {ref_var_content.value}]\n"
-                if len(current_text) + len(line) > 4096:
-                    text_chunks.append(current_text)
-                    current_text = ""
-                current_text += line
-            if current_text:
-                text_chunks.append(current_text)
-            return text_chunks
+                text_differences += line
+            return split_msg_in_chunks(text_differences)
         else:
             return [differences,missing_in_subject,missing_in_reference]
     except Exception as e:
@@ -745,12 +766,12 @@ def mod_is_installed(id1, id2):
                         logger(f"{modid} is in the list but {workshopid} isn't. Weird, since a workshopid can have multiple modid but not viceversa. If mods are being loaded correctly, you can safely ignore this warning.", "WARNING") #This case might be a hint for issues in loading mods in game
                         return None
                 else:
-                    logger(f"{modid} is not in the list but {workshopid} is. It could be a portion of the same mod with a different name.", "INFO", log_file()) #This case might be a hint for issues in loading mods in game
+                    logger(f"{modid} is not in the list but {workshopid} is. It could be a portion of the same mod with a different name.", "INFO", THIS_LOG_FILE) #This case might be a hint for issues in loading mods in game
                     return False
             else:
                 return valid
         else:
-            logger("Mod IDs entered in chat ("+modid+", "+workshopid+") are invalid. Are you having fun or what?", "WARNING", log_file())
+            logger("Mod IDs entered in chat ("+modid+", "+workshopid+") are invalid. Are you having fun or what?", "WARNING", THIS_LOG_FILE)
             return None
     except Exception as e:
         logger(e, "ERROR")
@@ -1514,9 +1535,13 @@ if __name__ == '__main__':
     restart_cancel_cmd='cancel'
     restart_desc='Restart the application'
     restart_msg="Are you really sure you want to restart the server? All users will be disconnected.\n\nPlease press: /"+restart_confirm_cmd+" to proceed.\n\nOr press: /"+restart_cancel_cmd+" to cancel."
+    log_cmd = 'log'
+    log_desc = 'Filters the log of this bot'
+    log_msg_helper ='''To filter the logs, please use:
+        /'''+log_cmd+''' <keyword>'''
     stats_cmd='stats'
     stats_desc='Display account stats of a registered account'
-    stats_msg_helper='To see your stats use /'+stats_cmd+''' or:
+    stats_msg_helper='''To see your stats use /'''+stats_cmd+''' or:
         /'''+stats_cmd+''' <steam id>  [for another player]'''
     mod_cmd='mod'
     mod_desc='Manage installed mods through polls'
@@ -1548,7 +1573,7 @@ https://help.steampowered.com/en/faqs/view/2816-BE67-5B69-0FEC'''
     help_msg='List of the commands:\n/'+help_cmd+': '+help_desc+'''
 /'''+restart_cmd+': '+restart_desc+'''
 /'''+status_cmd+': '+status_desc+'''
-/'''+compare_cmd+': '+compare_msg_helper+'\n'+mod_msg_helper+'\n'+setting_msg_helper+'\n'+stats_msg_helper+'\n'+rename_msg_helper+'\n'+register_msg_helper
+/'''+compare_cmd+': '+compare_msg_helper+'\n'+mod_msg_helper+'\n'+setting_msg_helper+'\n'+stats_msg_helper+'\n'+log_msg_helper+'\n'+rename_msg_helper+'\n'+register_msg_helper
 
     ### OTHER MESSAGES
 
@@ -1681,12 +1706,12 @@ def player_client_login_event(steam_id, username, ip, accesslevel='user'):
     try:
         global open_sessions
         if not multi_fucker_autentication(steam_id, username, 1):
-            server_chat_message(f"A player connected to the server: {username}")
             sync_with_server_whitelist()
             session = Session()
             session.steam_id = steam_id
             session.id = session_open(steam_id, ip)
             open_sessions.append(session)
+            return True
     except Exception as e:
         logger(e, "ERROR")
         
@@ -1694,7 +1719,6 @@ def player_client_logout_event(steam_id, username, ip, accesslevel='user'):
     try:
         global open_sessions
         if not multi_fucker_autentication(steam_id, username, 0):
-            server_chat_message(f"A player disconnected from the server: {username}")
             sync_with_server_whitelist()
             if open_sessions:
                 for session in open_sessions:
@@ -1703,6 +1727,7 @@ def player_client_logout_event(steam_id, username, ip, accesslevel='user'):
                         open_sessions.pop(open_sessions.index(session))
             else:
                 logger("No open sessions, yet a player logged out.", "ERROR")
+            return True
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1716,18 +1741,26 @@ def alert_bot(keyword, line):
         #print(line)
         import re
         if keyword == log_key_start:
-            server_chat_message(SERVICE_NAME.capitalize()+" is now online")
+            msg = SERVICE_NAME.capitalize()+" started."
+            logger(msg, "INFO")
+            server_chat_message(msg)
             #if not changes_are_applied():
             #    server_chat_message("Seems like some changes were not applied since last reboot. Check logs for more info.")
         elif keyword == log_key_stop:
-            server_chat_message(SERVICE_NAME.capitalize()+" is going down...")
+            msg = SERVICE_NAME.capitalize()+" stopped."
+            logger(msg, "INFO")
+            server_chat_message(msg)
         elif mod_fail_flag and keyword == log_key_mod_fail:
             match = re.search(mod_fail_re_pattern, line)
-            server_chat_message(f"Mod \"{match.group(1)}\" failed to load while starting the server")
+            msg = f"Mod \"{match.group(1)}\" failed to load while starting the server"
+            logger(msg, "INFO")
+            server_chat_message(msg)
         elif command_flag and keyword == log_key_cmd:
             if '"quit"' not in line and '"save"' not in line and 'kickuser MFA' not in line:
                 index = line.find('command entered')
-                server_chat_message(line[index:].capitalize())
+                msg = line[index:].capitalize()
+                logger(msg, "INFO")
+                cheat_alert(msg)
         elif join_flag and keyword == log_key_client_init:
             match = re.search(log_key_client_re_pattern, line)
             if match:
@@ -1735,7 +1768,10 @@ def alert_bot(keyword, line):
                 steam_id = int(match.group(2))
                 accesslevel = match.group(3)
                 username = match.group(4)
-                player_client_login_event(steam_id, username, ip)
+                if player_client_login_event(steam_id, username, ip):
+                    msg = f"A player connected to the server: {username}"
+                    logger(msg, "INFO")
+                    server_chat_message(msg)
         elif left_flag and keyword == log_key_client_logout:
             match = re.search(log_key_client_re_pattern, line)
             if match:
@@ -1743,7 +1779,10 @@ def alert_bot(keyword, line):
                 steam_id = int(match.group(2))
                 accesslevel = match.group(3)
                 username = match.group(4)
-                player_client_logout_event(steam_id, username, ip)
+                if player_client_logout_event(steam_id, username, ip):
+                    msg = f"A player disconnected from the server: {username}"
+                    logger(msg, "INFO")
+                    server_chat_message(msg)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -2041,7 +2080,7 @@ def mod_poll_img(new_reform, workshop_url):
 
 def setting_poll_launch(new_reform):
     try:
-        return create_poll(new_reform.reform_chat_id, new_reform.reform_name, ['Yes','No'])
+        return create_poll(new_reform.reform_chat_id, new_reform.reform_description, ['Yes','No'])
     except Exception as e:
         logger(e, "ERROR")
 
@@ -2053,7 +2092,6 @@ def create_reform(message, ctype, change):
             new_reform = Reform()
             new_reform.reform_id = message.id
             new_reform.reform_chat_id = message.chat.id
-            new_reform.reform_description = "" # FUTURE IMPLEMENTATION
             new_reform.reform_date = unix_timestamp()
             new_reform.reform_implemented = 0
             new_reform.reform_is_active = 1
@@ -2068,7 +2106,8 @@ def create_reform(message, ctype, change):
                 new_reform.change_mod_action = action
                 new_reform.change_mod_modid = modid
                 new_reform.change_mod_workshopid = workshopid
-                new_reform.reform_name = f"Do you want to {action} {modid}?"
+                new_reform.reform_name = f"{action.capitalize()} {modid}"
+                new_reform.reform_description = f"Do you want to {action} <b>{modid}</b>?"
                 poll = mod_poll_launch(new_reform, workshop_url)
                 poll_img = mod_poll_img(new_reform, workshop_url)
             elif ctype == 'setting':
@@ -2076,7 +2115,8 @@ def create_reform(message, ctype, change):
                 new_reform.change_setting_variable = variable
                 new_reform.change_setting_old_value = get_setting(variable).value
                 new_reform.change_setting_new_value = value
-                new_reform.reform_name = f"Set {variable} = {value}"
+                new_reform.reform_name = f"{variable} {value}"
+                new_reform.reform_description = f"Do you want to set {variable} = {value}?"
                 poll = setting_poll_launch(new_reform)
             new_reform.poll_id = poll.poll.id
             new_reform.poll_message_id = poll.message_id
@@ -2084,7 +2124,11 @@ def create_reform(message, ctype, change):
             #new_reform.print_all()
             save_reform(new_reform)
         else:
-            reply_to(fake_message(clone.reform_chat_id, clone.poll_message_id), "This change has been already proposed and is under trial process.")
+            if message.chat.id != clone.reform_chat_id:
+                bot.forward_message(chat_id=message.chat.id, from_chat_id=clone.reform_chat_id, message_id=clone.poll_message_id)
+                reply_to(message, "This change has been already proposed in another chat and is under trial process.")
+            else:
+                reply_to(fake_message(clone.reform_chat_id, clone.poll_message_id), "This change has been already proposed and is under trial process.")
     except Exception as e:
         logger(e, "ERROR")
 
@@ -2102,12 +2146,15 @@ def start_game_server():
 
 if __name__ == '__main__':
     try:
-        if not tmux_session_is_still_open(SERVICE_NAME):
-            import threading
-            pz_game_server_thread = threading.Thread(target=start_game_server)
-            pz_game_server_thread.start()
-        else:
-            logger(f"The game server tmux session (\"{SERVICE_NAME}\") is already/still up. I won't launch another instance.", "INFO")
+        import sys
+        start_pzserver_flag = '--startserver' in sys.argv
+        if start_pzserver_flag:
+            if not tmux_session_is_still_open(SERVICE_NAME):
+                import threading
+                pz_game_server_thread = threading.Thread(target=start_game_server)
+                pz_game_server_thread.start()
+            else:
+                logger(f"The game server tmux session (\"{SERVICE_NAME}\") is already/still up. I won't launch another instance.", "INFO")
     except Exception as e:
         logger(e, "ERROR")
 
@@ -2141,6 +2188,16 @@ if __name__ == '__main__':
             else:
                 status = "???"
             reply_to(message, "The PZserver is currently "+status)
+        # SHOW LOG
+        @bot.message_handler(commands=[log_cmd])
+        def log_command(message):
+            command = message.text.split()
+            if len(command) == 2:
+                text_chunks = split_msg_in_chunks(run_command(f"cat {THIS_LOG_FILE} | grep {command[1]}", log=False))
+                for chunk in text_chunks:
+                    reply_to(message, chunk, parse_mode='HTML')
+            else:
+                reply_to(message, log_msg_helper)
         # SHOW DIFF
         @bot.message_handler(commands=[compare_cmd])
         def compare_command(message):
@@ -2149,6 +2206,7 @@ if __name__ == '__main__':
                 def send_diff():
                     exclusion_list=['ServerWelcomeMessage','Mods','WorkshopItems','PublicDescription','PublicName','ServerPlayerID','ResetID']
                     text_chunks = compare_settings(global_settings, vanilla_settings, as_text=True, exclusion_list=exclusion_list)
+                    print(text_chunks)
                     for chunk in text_chunks:
                         reply_to(message, chunk, parse_mode='HTML')
                     return True
@@ -2171,7 +2229,7 @@ if __name__ == '__main__':
         # SET SETTING DEFAULT
         @bot.message_handler(commands=[set_default_cmd])
         def set_setting_defaults_command(message):
-            if is_dev(message):
+            if member_is_dev(message):
                 command = message.text.split()
                 if len(command) == 1:
                     run_command(f"cp {serverini[0]} {DEFAULT_serverini[0]}")
@@ -2382,7 +2440,7 @@ if __name__ == '__main__':
                 elif command[1] == 'move' and len(command) == 4 and string_is_integer(command[2]) and string_is_integer(command[3]):
                     move_mod(int(command[2]), int(command[3]))
                 elif command[1] == 'force' and len(command) in range(3,6):
-                    if is_dev(message):
+                    if member_is_dev(message):
                         command.pop(1)
                         install_uninstall_mod_cmd_handler(command, force=True)
                 else:
@@ -2392,12 +2450,13 @@ if __name__ == '__main__':
         # MODIFY PZSERVER SETTINGS
         @bot.message_handler(commands=[setting_cmd])
         def setting_command(message, force=False):
-            def set_setting_cmd_handler(command=None, force=False):
-                if not command:
-                    command = message.text.split()
-                if is_setting(command[2]) and command[2] in ["ServerWelcomeMessage", "Map", "PublicName", "PublicDescription", "DiscordChannel"]: # Exception List
+            def set_setting_cmd_handler(command, force=False):
+                if command[2] in ["ServerWelcomeMessage", "Map", "PublicName", "PublicDescription", "DiscordChannel"]: # Exception List
                     import re
-                    match = re.match(r"/setting set (\w+) (.+)", message.text)
+                    if not force:
+                        match = re.match(r"/setting set (\w+) (.+)", message.text)
+                    else:
+                        match = re.match(r"/setting force set (\w+) (.+)", message.text)
                     if match:
                         content = match.group(2)
                         if not force:
@@ -2407,35 +2466,35 @@ if __name__ == '__main__':
                             reply_to(message, msg_change_implemented)
                     else:
                         reply_to(message, setting_msg_helper)
-                elif len(command) == 4:
-                    if is_setting(command[2]):
-                        if not force:
-                            create_reform(message, 'setting', [command[2], command[3]])
-                        else:
-                            set_setting_value(command[2], command[3])
-                            reply_to(message, msg_change_implemented)
-                    else:
-                        reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?")
+                elif not force:
+                    create_reform(message, 'setting', [command[2], command[3]])
                 else:
-                    reply_to(message, setting_msg_helper)
+                    set_setting_value(command[2], command[3])
+                    reply_to(message, msg_change_implemented)
+            def set_setting_cmd_info_setup(desc, value):
+                return f"{desc}\nCurrent Setting: *{value}*"
             # Alright...
             command = message.text.split()
-            if command[1] == "get":
-                if len(command) == 3:
+            if len(command) in range(3,6):
+                if (len(command) == 3 and command[1] == 'get') or (len(command) == 4 and command[1] == 'set'):
                     if is_setting(command[2]):
-                        reply_to(message, get_setting(command[2]).value)
-                        reply_to(message, get_setting(command[2]).description)
+                        setting_info = set_setting_cmd_info_setup(get_setting(command[2]).description, get_setting(command[2]).value)
+                        if command[1] == 'get':
+                            reply_to(message, setting_info)
+                        elif command[1] == 'set':
+                            set_setting_cmd_handler(command)
+                            reply_to(message, setting_info)
                     else:
-                        reply_to(message, command[2]+" was not recognized as setting. Could it be currently absent in the file?")
-                else:
-                    reply_to(message, setting_msg_helper)
-            elif command[1] == "set":
-                set_setting_cmd_handler()
-            elif command[1] == 'force' and command[2] == 'set' and len(command) == 5:
-                is_dev = member_is_dev(message)
-                if is_dev(message):
-                    command.pop(1)
-                    set_setting_cmd_handler(command, force=True)
+                        reply_to(message, f"\"*{command[3]}*\" is not a setting of this server.")
+                if len(command) == 5 and command[1] == 'force' and command[2] == 'set':
+                    if is_setting(command[3]):
+                        setting_info = set_setting_cmd_info_setup(get_setting(command[2]).description, get_setting(command[2]).value)
+                        member_is_dev = member_is_dev(message)
+                        if member_is_dev(message):
+                            command.pop(1)
+                            set_setting_cmd_handler(command, force=True)
+                    else:
+                        reply_to(message, f"\"*{command[3]}*\" is not a setting of this server.")
             else:
                 reply_to(message, setting_msg_helper)
         # LISTEN FOR UPDATES FROM YOUR NON-ANONYMOUS POLLS
