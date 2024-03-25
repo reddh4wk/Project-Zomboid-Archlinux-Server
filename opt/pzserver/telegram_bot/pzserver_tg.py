@@ -51,7 +51,8 @@
 
 import os
 import sys
-import platform
+import threading
+import signal
 
 if __name__ == '__main__':
     if '--debug' in sys.argv:
@@ -68,7 +69,6 @@ if __name__ == '__main__':
     SERVICE_FOLDER = os.path.abspath(os.path.join(THIS_FOLDER, os.pardir))
     SERVICE_NAME = os.path.basename(SERVICE_FOLDER) # Please put the server in a folder with a name different form "vanilla" or "default"
     SERVICE_LOG = os.path.join(SERVICE_FOLDER, SERVICE_NAME+'.log')
-    SERVICE_MANAGER = os.path.join(SERVICE_FOLDER, SERVICE_NAME+"_manager.sh")
     HOME_FOLDER = os.path.expanduser("~")
     ZOMBOID_FOLDER=os.path.join(HOME_FOLDER, 'Zomboid')
     ZOMBOID_SETTINGS_FOLDER=os.path.join(ZOMBOID_FOLDER, 'Server')
@@ -95,6 +95,16 @@ if __name__ == '__main__':
     DEBUG_CHAT = [] #Test
     TOKEN = '' # Telegram Bot API TOKEN
     DEVS=[] #Your telegram ID. It will allow you to force changes.
+    
+    # POLL SETTINGS
+    POLL_EXPIRE_PERIOD = 7                  # After this number of days, a poll expires and gets closed
+    POLL_WC_CAN_PASS = True                 # If this is set to true, a poll can pass before the expire period without reaching the consensus (WC mode)
+    POLL_WC_PERC = 0.5                      # At least this percentage of the people that create consensus need to vote even in WC mode.
+    POLL_WC_PASS_AFTER = 3                  # At least this amount of days need to pass before the poll is approved even in WC mode.
+    POLL_WC_UNANIMITY_COEFFICIENT = 0.8     # At least this percentage of people need to agree for the WC mode pass.
+
+    # GAME SERVER MANAGER
+    SYSTEMCTL = False
 
 ########################################################################################################################
 ### INFORMATION FOR THE LOG FILE
@@ -104,7 +114,7 @@ def log_timestamp():
     from datetime import datetime
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-def logger(message, msg_type, log_file=THIS_LOG_FILE):
+def logger(message, msg_type, log_file=THIS_LOG_FILE, need_traceback=True):
     import os
     import traceback
     with open(log_file, 'a') as f:
@@ -112,9 +122,13 @@ def logger(message, msg_type, log_file=THIS_LOG_FILE):
         msg_body = f"[{timestamp}][{msg_type}] {str(message)}"
         if DEBUG_MODE:
             print(msg_body)
-        f.write(msg_body+"\n")
+        if msg_type != 'DEBUG':
+            f.write(msg_body+"\n")
+        else:
+            if DEBUG_MODE:
+                f.write(msg_body+"\n")
         traceback_str = traceback.format_exc()
-        if msg_type == 'ERROR':
+        if msg_type in ['ERROR','SQL_ERROR'] and need_traceback:
             if traceback_str:
                 msg_body = f"[{timestamp}][TRACEBACK] {traceback_str}"
                 if DEBUG_MODE:
@@ -172,7 +186,7 @@ def log_timestamp_to_unix_timestamp(log_timestamp):
     except Exception as e:
         logger(e, "ERROR")
 
-def run_command(command, log=True):
+def run_command(command, log=True, always_print_output=False):
     try:
         if DEBUG_MODE:
             if log:
@@ -181,12 +195,20 @@ def run_command(command, log=True):
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         output, error = process.communicate()
         if process.returncode != 0:
-            if output:
-                logger(output, "OS ERROR")
+            logger(f"Command execution failed with return code: {process.returncode}", "SYSERROR")
             if error:
-                logger(error, "OS ERROR")
-            return False
-        return output
+                logger(f"SysError: {error.strip()}", "SYSERROR")
+        if always_print_output:
+            if log:
+                logger(f"Command execution successful: {output.strip()}", "DEBUG")
+        return [not process.returncode, output, error]
+    except Exception as e:
+        logger(f"An error occurred while executing command '{command}': {e.strip()}", "ERROR")
+        return False
+
+def run_command_on_gameserver(server_name, command):
+    try:
+        return run_command(f"tmux send-keys -t {server_name} '{command}' C-m")
     except Exception as e:
         logger(e, "ERROR")
 
@@ -200,7 +222,7 @@ def rm(path):
 def check_service_status(service_name=SERVICE_NAME):
     try:
         import subprocess
-        if 'Active: active (running)' in run_command('systemctl status '+SERVICE_NAME).split('\n')[2]:
+        if 'Active: active (running)' in run_command('systemctl status '+SERVICE_NAME)[1].split('\n')[2]:
             return True
         else:
             return False
@@ -306,7 +328,7 @@ def get_pid_and_name():
 
 def is_already_running(current_pid, current_script):
     try:
-        processes = run_command('ps aux | grep ' + current_script)
+        processes = run_command('ps aux | grep ' + current_script)[1]
         if processes:
             lines = processes.split('\n')
             for line in lines:
@@ -505,6 +527,9 @@ def init_reform_table():
             )''')
         conn.commit()
         conn.close()
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
 
@@ -541,6 +566,9 @@ def init_players_table():
             )''')
         conn.commit()
         conn.close()
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
 
@@ -569,6 +597,9 @@ def init_sessions_table():
             )''')
         conn.commit()
         conn.close()
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
 
@@ -591,6 +622,9 @@ def init_mfa_table():
             )''')
         conn.commit()
         conn.close()
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
 
@@ -612,6 +646,9 @@ def init_pending_queries_table():
             )''')
         conn.commit()
         conn.close()
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
 
@@ -651,9 +688,14 @@ def get_pending_rename_data(get_fake_message=False):
                     else:
                         data.append([ID, old_username, new_username, steam_id, fake_message(chat_id, message_id)])
             return data
-        conn.close()
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def sync_with_server_whitelist():
     try:
@@ -663,8 +705,8 @@ def sync_with_server_whitelist():
         # Need to copy to another file to open it since it's already open by the game. Also safer to touch just the copy.
         run_command(f'cp {ZOMBOID_SERVER_DB} {TEMP_DB}')
         # Let's open the bot DB
-        pztg_db = sqlite3.connect(pztgdb)
-        c = pztg_db.cursor()
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
         # And attach the game DB to make use of more efficient sorting functions even if we don't realistically really need it
         c.execute(f"ATTACH DATABASE '{TEMP_DB}' AS game_server_db")
         c.execute('''
@@ -708,12 +750,17 @@ def sync_with_server_whitelist():
                     c.execute('''DELETE FROM pending_queries WHERE id = ?''', (ID,))
                     reply_to(fake_message, "Another user logged in with the username you wanted to use before reboot. Request canceled.")
         # Commit the changes and close the connection
-        pztg_db.commit()
-        pztg_db.close()
+        conn.commit()
         # And clean by removing the temporary copy
         rm(TEMP_DB)
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def add_to_pending_queries(query_type, db_path, query, chat_id, message_id):
     try:
@@ -722,21 +769,33 @@ def add_to_pending_queries(query_type, db_path, query, chat_id, message_id):
         c = conn.cursor()
         c.execute('''INSERT INTO pending_queries (query_type, db_path, query, pending, chat_id, message_id) VALUES (?, ?, ?, 1, ?, ?)''', (query_type, db_path, query, chat_id, message_id))
         conn.commit()
-        conn.close()
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def execute_query(db_path, query):
     try:
-        import sqlite3
+        logger("Executing query: "+query, "DEBUG")
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         c.execute(query)
+        logger("Query executed successfully.", "DEBUG")
         conn.commit()
-        conn.close()
         return True
+    except sqlite3.Error as e:
+        logger(f"SQLite error: {e}", "SQL_ERROR")
+        return False
     except Exception as e:
-        logger(e, "ERROR")    
+        logger(f"Error: {e}", "ERROR")
+        return False
+    finally:
+        if conn:
+            conn.close()
 
 def run_pending_queries():
     try:
@@ -745,14 +804,19 @@ def run_pending_queries():
         c = conn.cursor()
         c.execute('''SELECT id, db_path, query FROM pending_queries WHERE pending = 1''')
         queries = c.fetchall()
-        for ID, db_path, query, query_type in queries:
+        for ID, db_path, query in queries:
             execute_query(db_path, query)
             c.execute('''UPDATE pending_queries SET pending = 0 WHERE ID = ?''', (ID,))
         conn.commit()
-        conn.close()
         return True
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
-        logger(e, "ERROR")   
+        logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def delete_pending_rename(username, steam_id):
     try:
@@ -766,10 +830,15 @@ def delete_pending_rename(username, steam_id):
                     c.execute('''DELETE FROM pending_queries WHERE id = ?''', (ID,))
                     deleted = True
             conn.commit()
-            conn.close()
             return deleted
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def submit_mfa_registration(steam_id, telegram_id, message):
     try:
@@ -778,9 +847,14 @@ def submit_mfa_registration(steam_id, telegram_id, message):
         c = conn.cursor()
         c.execute('''INSERT INTO mfa (steam_id, telegram_id, chat_id, message_id, confirmed, submitted_on) VALUES (?, ?, ?, ?, ?, ?)''', (int(steam_id), int(telegram_id), int(message.chat.id), int(message.id), 0, unix_timestamp()))
         conn.commit()
-        conn.close()
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def player_set_telegram_id(steam_id, telegram_id):
     try:
@@ -792,30 +866,39 @@ def player_set_telegram_id(steam_id, telegram_id):
         if existing_player:
             c.execute('''UPDATE players SET telegram_id = ? WHERE steam_id = ?''', (int(telegram_id), int(steam_id)))
             conn.commit()
-            conn.close()
             return True
         conn.close()
         return False
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def confirm_mfa_registration(steam_id, username, telegram_id):
     try:
         import sqlite3
-        global MFA
         conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
         c.execute(f'''UPDATE mfa SET confirmed = 1, pending_removal = 1 WHERE steam_id = {int(steam_id)} AND telegram_id = {int(telegram_id)}''')
         c.execute(f'''UPDATE players SET telegram_id = {telegram_id} WHERE steam_id = {steam_id}''')
         conn.commit()
-        conn.close()
         pending_query_type = 'mfa'
         add_to_pending_queries(pending_query_type, ZOMBOID_SERVER_DB, '''DELETE FROM whitelist WHERE steam_id = ? AND username = ?''', (steam_id, username))
         add_to_pending_queries(pending_query_type, ZOMBOID_PLAYER_DB, '''DELETE FROM networkPlayers WHERE steam_id = ? AND username = ?''', (steam_id, username))
         add_to_pending_queries(pending_query_type, pztgdb, '''DELETE FROM players WHERE steam_id = ? AND username = ?''', (steam_id, username))
         add_to_pending_queries(pending_query_type, pztgdb, '''UPDATE mfa SET pending_removal = 0 WHERE steam_id = ? AND telegram_id = ?''', (steam_id, telegram_id))
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def get_mfa_registrants():
     try:
@@ -827,10 +910,15 @@ def get_mfa_registrants():
         MFA = []
         for steam_id, telegram_id, chat_id, message_id, confirmed in results:
             MFA.append([steam_id, telegram_id, fake_message(chat_id, message_id), confirmed])
-        conn.close()
         return MFA
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def save_reform(reform):
     try:
@@ -852,9 +940,14 @@ def save_reform(reform):
             values = tuple(reform.__dict__.values())
             c.execute(f'''INSERT INTO reforms ({columns}) VALUES ({placeholders})''', values)
         conn.commit()
-        conn.close()
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def get_player(steam_id):
     try:
@@ -863,13 +956,18 @@ def get_player(steam_id):
         c = conn.cursor()
         c.execute('''SELECT * FROM players WHERE steam_id = ?''', (int(steam_id),))
         result = c.fetchone()
-        conn.close()
         if result:
             return Player(*result)
         else:
             return None
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def get_player_list():
     try:
@@ -878,10 +976,15 @@ def get_player_list():
         c = conn.cursor()
         c.execute('''SELECT username FROM players''')
         result = c.fetchall()
-        conn.close()
         return result
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def get_reform(reform_id):
     try:
@@ -890,13 +993,18 @@ def get_reform(reform_id):
         c = conn.cursor()
         c.execute('''SELECT * FROM reforms WHERE reform_id = ?''', (int(reform_id),))
         result = c.fetchone()
-        conn.close()
         if result:
             return Reform(*result)
         else:
             return None
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def get_reform_by_poll_id(poll_id):
     try:
@@ -905,13 +1013,18 @@ def get_reform_by_poll_id(poll_id):
         c = conn.cursor()
         c.execute('''SELECT * FROM reforms WHERE poll_id = ?''', (int(poll_id),))
         result = c.fetchone()
-        conn.close()
         if result:
             return Reform(*result)
         else:
             return None
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def get_mod_clone_change(modid, workshopid, action):
     try:
@@ -920,13 +1033,18 @@ def get_mod_clone_change(modid, workshopid, action):
         c = conn.cursor()
         c.execute('''SELECT * FROM reforms WHERE change_mod_modid = ? AND change_mod_workshopid = ? AND change_mod_action = ? AND reform_is_active = ?''', (modid, int(workshopid), action, 1))
         result = c.fetchone()
-        conn.close()
         if result:
             return Reform(*result)
         else:
             return False
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def get_setting_clone_change(variable, new_value):
     try:
@@ -935,13 +1053,18 @@ def get_setting_clone_change(variable, new_value):
         c = conn.cursor()
         c.execute('''SELECT * FROM reforms WHERE change_setting_variable = ? AND change_setting_new_value = ? AND reform_is_active = ?''', (variable, new_value, 1))
         result = c.fetchone()
-        conn.close()
         if result:
             return Reform(*result)
         else:
             return False
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def player_get_telegram_id(steam_id):
     try:
@@ -950,13 +1073,18 @@ def player_get_telegram_id(steam_id):
         c = conn.cursor()
         c.execute('''SELECT telegram_id FROM players WHERE steam_id = ?''', (int(steam_id),))
         result = c.fetchone()
-        conn.close()
         if result:
             return result[0]
         else:
             return False
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def user_is_registered(telegram_id):
     try:
@@ -965,10 +1093,15 @@ def user_is_registered(telegram_id):
         c = conn.cursor()
         c.execute('''SELECT steam_id FROM mfa WHERE telegram_id=? AND confirmed=?''', (int(telegram_id),1))
         steam_id = c.fetchone()
-        conn.close()
         return steam_id[0] if steam_id else False
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def  player_is_registered(steam_id):
     try:
@@ -977,10 +1110,15 @@ def  player_is_registered(steam_id):
         c = conn.cursor()
         c.execute('''SELECT telegram_id FROM mfa WHERE steam_id=? AND confirmed=?''', (int(steam_id),1))
         telegram_id = c.fetchone()
-        conn.close()
         return telegram_id[0] if telegram_id else False
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def session_open(steam_id, ip):
     try:
@@ -990,10 +1128,15 @@ def session_open(steam_id, ip):
         c.execute('''INSERT INTO sessions (steam_id, login, ip) VALUES (?, ?, ?)''', (int(steam_id), unix_timestamp(), ip))
         session_id = c.lastrowid
         conn.commit()
-        conn.close()
         return session_id
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def session_close(session_id):
     try:
@@ -1002,13 +1145,15 @@ def session_close(session_id):
         c = conn.cursor()
         c.execute('''UPDATE sessions SET logout = ? WHERE session_id = ?''', (unix_timestamp(), int(session_id)))
         conn.commit()
-        conn.close()
         return True
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
-
-def get_player_stats(telegram_id):
-    pass
+    finally:
+        if conn:
+            conn.close()
 
 def get_user_activity_info(telegram_id):
     try:
@@ -1056,10 +1201,7 @@ def get_user_activity_info(telegram_id):
                     voted_no_count += 1
                 else:
                     did_not_vote_count += 1
-
-        # Close connection
-        conn.close()
-
+        
         voted_yes_perc = (voted_yes_count / poll_count * 100) if poll_count != 0 else 0
         voted_no_perc = (voted_no_count / poll_count * 100) if poll_count != 0 else 0
         did_not_vote_perc = (did_not_vote_count / poll_count * 100) if poll_count != 0 else 0
@@ -1076,12 +1218,49 @@ def get_user_activity_info(telegram_id):
 Out of {poll_count} polls, you voted:
 <b>Yes</b>: {voted_yes_count} ({round(voted_yes_perc)}%) - <b>No</b>: {voted_no_count} ({round(voted_no_perc)}%) - <b>Blank</b>: {did_not_vote_count} ({round(did_not_vote_perc)}%)'''
 
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 ########################################################################################################################
 ### SERVER SETTINGS
 ########################################################################################################################
+
+def save_setting_to_file(variable_name, value, table_name='main'):
+    try:
+        current_setting = get_setting(variable_name, table_name=table_name)
+        file_path = current_setting['file_path']
+        with open(file_path, 'r') as file:
+            all_lines = file.readlines()
+            line_number = current_setting['line_number']
+            line = all_lines[line_number]
+            if variable_name in line:
+                if current_setting['value'] != "":
+                    new_line = line.replace(current_setting['value'], value)
+                else:
+                    if ".ini" in current_setting['basename']:
+                        line = line.split("=")
+                        line.insert(1, "="+value)
+                        new_line = ''.join(line)
+                    elif ".lua" in current_setting['basename']:
+                        line = line.split("=")
+                        line.insert(1, "= "+value)
+                        new_line = ''.join(line)
+                    else:
+                        logger(f"Not determinable file type for: {current_setting['basename']}", "ERROR", need_traceback=False)
+                logger(f"In {file_path}: \"{new_line.strip()}\"", "CHANGE")
+                all_lines[line_number] = new_line
+                with open(file_path, 'w') as file:
+                    file.writelines(all_lines)
+                return True
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
 
 def process_serverini(line):
     try:
@@ -1175,7 +1354,10 @@ def reload_settings(serverini=SERVERINI, sandboxvars=SANDBOXVARS, table_name='ma
             conn.commit()
             conn.close()
             return True
-        logger(f"\'{serverini[0]}\' or \'{sandboxvars[0]}\' wasn't found.", "ERROR")
+        logger(f"\'{serverini[0]}\' or \'{sandboxvars[0]}\' wasn't found.", "ERROR", need_traceback=False)
+        return False
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
         return False
     except Exception as e:
         logger(e, "ERROR")
@@ -1190,7 +1372,6 @@ def compare_settings(subj_settings, ref_settings, as_text=False, console=False, 
         subject = c.fetchall()
         c.execute(f'''SELECT * FROM {ref_settings+"_settings"}''')
         reference = c.fetchall()
-        conn.close()
         differences = []
         missing_in_subject = []
         missing_in_reference = []
@@ -1224,8 +1405,14 @@ def compare_settings(subj_settings, ref_settings, as_text=False, console=False, 
             return split_msg_in_chunks(text_differences)
         else:
             return [differences, missing_in_subject, missing_in_reference]
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 def get_setting(variable_name, table_name='main'):
     try:
@@ -1245,66 +1432,40 @@ def get_setting(variable_name, table_name='main'):
                 for i in range(len(path_column_names)):
                     if path_column_names[i] != 'table_associated':
                         setting_dict[path_column_names[i]] = path_result[i]
-            conn.close()
             return setting_dict
         else:
             return False
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
-        return None
+    finally:
+        if conn:
+            conn.close()
 
-def set_setting_value(variable, value, table_name='main'):
+def set_setting_value(variable_name, value, table_name='main'):
     try:
         import sqlite3
-        conn = sqlite3.connect(pztgdb)  # Connect to the database
+        conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
-        # Retrieve setting details from the database
-        c.execute(f'''UPDATE {table_name+'_settings'} SET value = ? WHERE variable = ?''', (value, variable))
+        c.execute(f'''UPDATE {table_name+'_settings'} SET value = ? WHERE variable = ?''', (value, variable_name))
+        save_setting_to_file(variable_name, value, table_name=table_name)
         conn.commit()
-        conn.close()
         return True
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
 
 if __name__ == '__main__':
     if not reload_settings():
         print("File settings were not found. Being an almost essential part, I'll exit.")
         exit()
-
-########################################
-### SETTINGS MANAGERS
-########################################
-
-def save_setting_to_file(variable_name, value, table_name='main'):
-    try:
-        file_path = get_setting(variable_name, table_name=table_name)['file_path']
-        with open(file_path, 'r') as file:
-            all_lines = file.readlines()
-            line_number = get_setting(variable_name, table_name=table_name)['line']
-            line = all_lines[line_number]
-            if variable_name in line:
-                old_setting = get_setting(variable_name, table_name=table_name)['line']
-                if old_setting['value'] != "":
-                    new_line = line.replace(old_setting['value'], value)
-                else:
-                    if ".ini" in old_setting['basename']:
-                        line = line.split("=")
-                        line.insert(1, "="+value)
-                        new_line = ''.join(line)
-                    elif ".lua" in old_setting.basename:
-                        line = line.split("=")
-                        line.insert(1, "= "+value)
-                        new_line = ''.join(line)
-                    else:
-                        logger(f"Not determinable file type for: {old_setting.basename}", "ERROR")
-                logger(f"In: {file_path}\n{new_line}", "CHANGE")
-                all_lines[line_number] = new_line
-                with open(file_path, 'w') as file:
-                    file.writelines(all_lines)
-                return True
-            return False
-    except Exception as e:
-        logger(e, "ERROR")
 
 ########################################
 ### MOD MANAGER & TOOLS
@@ -1414,7 +1575,7 @@ def strip_IDs_from_steam(url):
                 return sort_valid_modid_workshopid(mod_id, url.split('=')[1])
             return False
         else:
-            logger(f"Failed to fetch page. Status code: {str(response.status_code)}", "ERROR")
+            logger(f"Failed to fetch page. Status code: {str(response.status_code)}", "ERROR", need_traceback=False)
             return None
     except Exception as e:
         logger(e, "ERROR")
@@ -1490,9 +1651,10 @@ def add_cmd(command_list, cmd, description):
     except Exception as e:
         logger(e, "ERROR")
 
-def add_cmd_bulk(command_list, cmd_list):
+def add_cmd_bulk(cmd_list):
     try:
         from telebot import types
+        command_list = []
         for cmd, description in cmd_list:
             add_cmd(command_list, cmd, description)
         return command_list
@@ -1501,39 +1663,53 @@ def add_cmd_bulk(command_list, cmd_list):
 
 def init_commands():
     try:
-        command_list = []
-        return add_cmd_bulk(command_list, [[start_cmd,start_desc],[restart_cmd,restart_desc],[status_cmd,status_desc],[stats_cmd,stats_desc],[compare_cmd,compare_desc],[mod_cmd,mod_desc],[setting_cmd,setting_desc],[rename_cmd,rename_desc],[register_cmd,register_desc],[help_cmd,help_desc]])
+        
+        return add_cmd_bulk([
+            [start_cmd,start_desc],
+            [restart_cmd,restart_desc],
+            [status_cmd,status_desc],
+            [stats_cmd,stats_desc],
+            [compare_cmd,compare_desc],
+            [mod_cmd,mod_desc],
+            [setting_cmd,setting_desc],
+            [rename_cmd,rename_desc],
+            [register_cmd,register_desc],
+            [log_cmd,log_desc],
+            [help_cmd,help_desc],
+            [force_cmd,force_desc]
+        ])
     except Exception as e:
         logger(e, "ERROR")
 
 ### COMMAND - MESSAGES
 
 if __name__ == '__main__':
+    id_cmd='id'
     start_cmd='start'
     start_desc='Display bot welcome message.'
     start_msg='Hi, I am Rotting Ghoul! I can automatically get you updates on the status of the PZserver.'
     status_cmd='status'
-    status_desc='Retrive the current status of '+SERVICE_NAME
-    set_default_cmd='default'
-    set_default_msg_helper='Use /default to set the current settings as default settings'
+    status_desc='Retrives the current status of '+SERVICE_NAME
     compare_cmd='diff'
     compare_desc='Shows differences between current settings and vanilla'
     compare_msg_helper='Shows variances between current and vanilla'
+    force_cmd='force'
+    force_desc='Forces the execution of some commands'
     restart_cmd='restart'
-    restart_confirm_cmd='confirm'
-    restart_cancel_cmd='cancel'
-    restart_desc='Restart the application'
+    restart_confirm_cmd='confirm_restart'
+    restart_cancel_cmd='cancel_restart'
+    restart_desc='Restarts the application'
     restart_msg="Are you really sure you want to restart the server? All users will be disconnected.\n\nPlease press: /"+restart_confirm_cmd+" to proceed.\n\nOr press: /"+restart_cancel_cmd+" to cancel."
     log_cmd = 'log'
     log_desc = 'Filters the log of this bot'
     log_msg_helper ='''To filter the logs, please use:
         /'''+log_cmd+''' <keyword>'''
     stats_cmd='stats'
-    stats_desc='Display account stats of a registered account'
+    stats_desc='Displays account stats of a registered account'
     stats_msg_helper='''To see your stats use /'''+stats_cmd+''' or:
         /'''+stats_cmd+''' <steam id>  [for another player]'''
     mod_cmd='mod'
-    mod_desc='Manage installed mods through polls'
+    mod_desc='Manages installed mods through polls'
     mod_msg_helper='''To use '''+mod_cmd+''' command please use:
         /'''+mod_cmd+''' list
         /'''+mod_cmd+''' install <Mod URL>
@@ -1542,7 +1718,7 @@ if __name__ == '__main__':
         /'''+mod_cmd+''' uninstall <Mod ID>
         /'''+mod_cmd+''' uninstall <Mod ID> <Workshop ID>'''
     setting_cmd='setting'
-    setting_desc='Manage server settings through polls'
+    setting_desc='Manages server settings through polls'
     setting_msg_helper='''To use '''+setting_cmd+''' command please use:
         /'''+setting_cmd+''' get <parameter>
         /'''+setting_cmd+''' set <parameter> <value>'''
@@ -1551,18 +1727,40 @@ if __name__ == '__main__':
     rename_msg_helper='''To use '''+rename_cmd+''' command please use (use double quotes):
         /'''+rename_cmd+''' "<old username>" "<new username>"'''
     register_cmd='register'
-    register_desc='Link the game account with your telegram account'
+    register_desc='Links the game account with your telegram account'
     register_msg_helper='''To link your game account and use /'''+stats_cmd+''' please use:
         /'''+register_cmd+''' <your steam id>
         
 How to find your steam ID:
 https://help.steampowered.com/en/faqs/view/2816-BE67-5B69-0FEC'''
+
+    #HELP
     help_cmd='help'
-    help_desc='Provide the command legenda.'
-    help_msg='List of the commands:\n/'+help_cmd+': '+help_desc+'''
+    help_desc='Provides the list of the commands'
+    help_msg=f'''To show the complete list of commands use /{help_cmd}!
 /'''+restart_cmd+': '+restart_desc+'''
 /'''+status_cmd+': '+status_desc+'''
-/'''+compare_cmd+': '+compare_msg_helper+'\n'+mod_msg_helper+'\n'+setting_msg_helper+'\n'+stats_msg_helper+'\n'+log_msg_helper+'\n'+rename_msg_helper+'\n'+register_msg_helper
+/'''+compare_cmd+': '+compare_msg_helper+'''
+'''+mod_msg_helper+'''
+'''+setting_msg_helper+'''
+'''+stats_msg_helper+'''
+'''+rename_msg_helper+'''
+'''+register_msg_helper
+
+    #COMPLETE HELP
+    complete_help_msg=f'''/{id_cmd}: Shows the telegram ID of this chat
+/{start_cmd}: {start_desc}
+/{force_cmd}: {force_desc}
+/'''+restart_cmd+': '+restart_desc+'''
+/'''+status_cmd+': '+status_desc+'''
+/'''+compare_cmd+': '+compare_msg_helper+'''
+'''+log_msg_helper+'''
+'''+mod_msg_helper+'''
+        /mod move <position> <position>
+'''+setting_msg_helper+'''
+'''+stats_msg_helper+'''
+'''+rename_msg_helper+'''
+'''+register_msg_helper
 
     ### OTHER MESSAGES
 
@@ -1575,6 +1773,7 @@ https://help.steampowered.com/en/faqs/view/2816-BE67-5B69-0FEC'''
     msg_unhandled_exception = "Unhandled exception, check logs, call the police or contact the administrator."
     msg_workshopid_from_file_failed = "Getting the workshop ID from the config file failed. Check logs."
     msg_only_master = "Only my master can use this. You have no power here."
+    msg_force_cmd_incorrect_syntax = "You are not my master, I can tell."
     msg_change_implemented = "This change has been implemented."
     msg_change_rejected = "This change has been rejected."
 
@@ -1665,20 +1864,14 @@ if __name__ == '__main__':
 def mfa_naming_convention(telegram_id):
     return f"MFA{str(telegram_id)}"
 
-def kick_player(username, msg):
-    try:
-        run_command(f"tmux send-keys -t {SERVICE_NAME} 'kickuser {username} -r \"{msg}\"' C-m")
-    except Exception as e:
-        logger(e, "ERROR")
-
 def multi_fucker_autentication(steam_id, username, login):
     try:
-        MFA = get_mfa_registrants()
-        if MFA:
-            for mfa_steam_id, mfa_telegram_id, message, confirmed in MFA:
+        mfa = get_mfa_registrants()
+        if mfa:
+            for mfa_steam_id, mfa_telegram_id, message, confirmed in mfa:
                 if username == mfa_naming_convention(mfa_telegram_id) and steam_id == mfa_steam_id:
                     if not confirmed:
-                        MFA.append(username)
+                        mfa.append(username)
                         confirm_mfa_registration(steam_id, username, mfa_telegram_id)
                         msg = f"Your game account has been successfully linked with telegram. The account \"{username}\" will be deleted on next reboot."
                         reply_to(message, msg)
@@ -1715,89 +1908,216 @@ def player_client_logout_event(steam_id, username, ip, accesslevel='user'):
                         session_close(session.id)
                         open_sessions.pop(open_sessions.index(session))
             else:
-                logger("No open sessions, yet a player logged out.", "ERROR")
+                logger("No open sessions, yet a player logged out.", "WARNING")
             return True
     except Exception as e:
         logger(e, "ERROR")
 
-########################################
-### PARSING FUNCTIONS
-########################################
+########################################################################################################################
+### GAME SERVER MANAGER + PARSING FUNCTION
+########################################################################################################################
 
-def alert_bot(keyword, line):
-    try:
-        #print(keyword)
-        #print(line)
-        import re
-        if keyword == log_key_start:
-            msg = SERVICE_NAME.capitalize()+" started."
-            logger(msg, "INFO")
-            server_chat_message(msg)
-            #if not changes_are_applied():
-            #    server_chat_message("Seems like some changes were not applied since last reboot. Check logs for more info.")
-        elif keyword == log_key_stop:
-            msg = SERVICE_NAME.capitalize()+" stopped."
-            logger(msg, "INFO")
-            server_chat_message(msg)
-        elif mod_fail_flag and keyword == log_key_mod_fail:
-            match = re.search(mod_fail_re_pattern, line)
-            msg = f"Mod \"{match.group(1)}\" failed to load while starting the server"
-            logger(msg, "INFO")
-            server_chat_message(msg)
-        elif command_flag and keyword == log_key_cmd:
-            if '"quit"' not in line and '"save"' not in line and 'kickuser MFA' not in line:
-                index = line.find('command entered')
-                msg = line[index:].capitalize()
-                logger(msg, "INFO")
-                cheat_alert(msg)
-        elif join_flag and keyword == log_key_client_init:
-            match = re.search(log_key_client_re_pattern, line)
-            if match:
-                ip = match.group(1)
-                steam_id = int(match.group(2))
-                accesslevel = match.group(3)
-                username = match.group(4)
-                if player_client_login_event(steam_id, username, ip):
-                    msg = f"A player connected to the server: {username}"
+class GameServerManager:
+    import threading
+    def __init__(self, server_name, server_log_path):
+        self.server_name = server_name
+        self.server_log_path = server_log_path
+        self.server_failed_to_start = threading.Event()
+        self.server_start_executed = threading.Event()
+        self.server_stop_executed = threading.Event()
+        self.server_starting = threading.Event()
+        self.server_stopping = threading.Event()
+        self.server_started = threading.Event()
+        self.server_stopped = threading.Event()
+        #self.backup_started = threading.Event()
+        #self.backup_stopped = threading.Event()
+    
+    def alert_bot(self, keyword, line):
+        try:
+            #print(keyword)
+            #print(line)
+            import re
+            if keyword == log_key_start:
+                self.server_started.set()
+                msg = SERVICE_NAME.capitalize()+" started."
+                server_chat_message(msg)
+            elif keyword == log_key_stop:
+                self.server_stopping.set()
+                msg = SERVICE_NAME.capitalize()+" stopped."
+                server_chat_message(msg)
+            elif mod_fail_flag and keyword == log_key_mod_fail:
+                match = re.search(mod_fail_re_pattern, line)
+                msg = f"Mod \"{match.group(1)}\" failed to load while starting the server"
+                logger(msg, "ERROR", need_traceback=False)
+                server_chat_message(msg)
+            elif command_flag and keyword == log_key_cmd:
+                if '"quit"' not in line and '"save"' not in line:
+                    index = line.find('command entered')
+                    msg = line[index:].capitalize()
                     logger(msg, "INFO")
-                    server_chat_message(msg)
-        elif left_flag and keyword == log_key_client_logout:
-            match = re.search(log_key_client_re_pattern, line)
-            if match:
-                ip = match.group(1)
-                steam_id = int(match.group(2))
-                accesslevel = match.group(3)
-                username = match.group(4)
-                if player_client_logout_event(steam_id, username, ip):
-                    msg = f"A player disconnected from the server: {username}"
-                    logger(msg, "INFO")
-                    server_chat_message(msg)
-    except Exception as e:
-        logger(e, "ERROR")
+                    cheat_alert(msg)
+            elif join_flag and keyword == log_key_client_init:
+                match = re.search(log_key_client_re_pattern, line)
+                if match:
+                    ip = match.group(1)
+                    steam_id = int(match.group(2))
+                    accesslevel = match.group(3)
+                    username = match.group(4)
+                    if player_client_login_event(steam_id, username, ip):
+                        msg = f"A player connected to the server: {username}"
+                        logger(msg, "INFO")
+                        server_chat_message(msg)
+            elif left_flag and keyword == log_key_client_logout:
+                match = re.search(log_key_client_re_pattern, line)
+                if match:
+                    ip = match.group(1)
+                    steam_id = int(match.group(2))
+                    accesslevel = match.group(3)
+                    username = match.group(4)
+                    if player_client_logout_event(steam_id, username, ip):
+                        msg = f"A player disconnected from the server: {username}"
+                        logger(msg, "INFO")
+                        server_chat_message(msg)
+        except Exception as e:
+            logger(e, "ERROR")
 
-def monitor_log(filename=SERVICE_LOG, keywords=[log_key_start, log_key_stop, log_key_client_init, log_key_client_logout, log_key_cmd, log_key_mod_fail]):
-    try:
-        import subprocess
-        run_command(f"> {filename}")
-        tail_process = subprocess.Popen(['tail', '-f', filename], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        for line in tail_process.stdout:
-            # Process each line as it is received
-            for keyword in keywords:
-                if isinstance(keyword, str):
-                    if keyword in line:
-                        alert_bot(keyword, line)
-                elif isinstance(keyword, list):
-                    if all(key_fragment in line for key_fragment in keyword):
-                        alert_bot(keyword, line)
-    except Exception as e:
-        logger(e, "ERROR")
+    def monitor_log(self):
+        try:
+            import subprocess
+            keywords=[log_key_start, log_key_stop, log_key_client_init, log_key_client_logout, log_key_cmd, log_key_mod_fail]
+            #run_command(f"> {self.server_log_path}")
+            tail_process = subprocess.Popen(['tail', '-f', self.server_log_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            for line in tail_process.stdout: # Process each line as it is received
+                for keyword in keywords:
+                    if isinstance(keyword, str):
+                        if keyword in line:
+                            self.alert_bot(keyword, line)
+                    elif isinstance(keyword, list):
+                        if all(key_fragment in line for key_fragment in keyword):
+                            self.alert_bot(keyword, line)
+        except Exception as e:
+            logger(e, "ERROR")
 
-### START PARSING
+    def execute_for_every_until_true(self, try_for, every, function, *args, **kwargs):
+        import time
+        start_time = time.time()
+        end_time = start_time + try_for
+        while time.time() < end_time:
+            if function(*args, **kwargs):
+                return True
+            time.sleep(every)
+        return False
+
+    def start_cmd(self):
+        try:
+            game_bin_path = os.path.join(SERVICE_FOLDER, "start-server.sh")
+            game_start_cmd = f"{game_bin_path} -servername {self.server_name} | tee {self.server_log_path}"
+            game_server_tmux_session_start = f"tmux new-session -d -s {self.server_name} \"{game_start_cmd}\""
+            r = run_command(game_server_tmux_session_start)
+            if r[0]:
+                self.server_start_executed.set()
+                timeout = 10
+                if self.execute_for_every_until_true(timeout,1,self.tmux_session_state,self.server_name,True):
+                    self.server_starting.set()
+                    return True
+                else:
+                    logger(f"Tmux session \"{self.server_name}\" did not come up since {str(timeout)} seconds from the execution.", "ERROR", need_traceback=False)
+                    return False
+        except Exception as e:
+            logger(e, "ERROR")
+                
+    def stop_cmd(self):
+        try:
+            if run_command_on_gameserver(self.server_name, 'save')[0]:
+                if run_command_on_gameserver(self.server_name, 'quit')[0]:
+                    self.server_stop_executed.set()
+                    timeout = 60
+                    if self.execute_for_every_until_true(timeout,2,self.tmux_session_state,self.server_name,False):
+                        self.server_stopped.set()
+                    return True
+                return True
+        except Exception as e:
+            logger(e, "ERROR")
+ 
+    def tmux_session_state(self, session_name, state):
+        try:
+            r = run_command(f"tmux list-sessions | grep {session_name}")
+            if r[0]:
+                logger(f"Lookup results for tmux session "+r[1].strip(), "DEBUG")
+            if state:
+                if r[0]:
+                    return True
+                else:
+                    return False
+            else:
+                if not r[0]:
+                    return True
+                else:
+                    return False
+        except Exception as e:
+            logger(e, "ERROR")
+            return None
+
+    def start(self):
+        try:
+            def init_start():
+                if not self.start_cmd():
+                    logger(f"Failed to start the server \"{self.server_name}\".", "ERROR", need_traceback=False)
+                    return
+            threading.Thread(target=init_start).start()
+            self.server_start_executed.wait()
+            logger(f"Started game server \"{self.server_name}\".", "DEBUG")
+            self.server_starting.wait()
+            logger(f"Started tmux session \"{self.server_name}\".", "DEBUG")
+            threading.Thread(target=self.monitor_log).start()
+            logger(f"Started parsing {self.server_log_path}", "DEBUG")
+            self.server_started.wait()
+            logger(f"Game Server \"{self.server_name}\" successfully started.", "INFO")
+            threading.Thread(target=self.monitor_log).start()
+            logger(f"Log monitor started for \"{self.server_name}\"", "DEBUG")
+            reload_settings()
+            logger(f"Settings have been reloaded for \"{self.server_name}\"", "DEBUG")
+        except Exception as e:
+            logger(e, "ERROR")
+
+    def stop(self):
+        try:
+            threading.Thread(target=self.stop_cmd).start()
+            self.server_stop_executed.wait()
+            logger(f"Stopped game server \"{self.server_name}\".", "DEBUG")
+            self.server_stopping.wait()
+            logger(f"Game Server \"{self.server_name}\" initiated a shut down.", "DEBUG")
+            self.server_stopped.wait()
+            logger(f"Game Server \"{self.server_name}\" has been shut down.", "INFO")
+        except Exception as e:
+            logger(e, "ERROR")
+
+    def restart(self):
+        try:
+            self.stop()
+            run_pending_queries()
+            self.start()
+        except Exception as e:
+            logger(e, "ERROR")
+
 if __name__ == '__main__':
     try:
-        import threading
-        pzserver_monitor_log_thread = threading.Thread(target=monitor_log)
-        pzserver_monitor_log_thread.start()
+        if not SYSTEMCTL:
+            game_manager = GameServerManager(SERVICE_NAME, SERVICE_LOG)
+            def shutdown_signal_handler(sig, frame):
+                if sig == signal.SIGTERM:
+                    logger(f"System Shutdown has being called. Shutting down the server...", "INFO")
+                    game_manager.stop()
+            signal.signal(signal.SIGTERM, shutdown_signal_handler)
+            noserver_flag = '--noserver' in sys.argv
+            if not noserver_flag:
+                if game_manager.tmux_session_state(SERVICE_NAME, True):
+                    logger(f"The game server session \"{SERVICE_NAME}\" is already live. Aborting launch.", "INFO")
+                else:
+                    run_pending_queries()
+                    threading.Thread(target=game_manager.start).start()
+            else:
+                logger(f"The flag --noserver has been used. No game server will be started. Pending queries on hold too.", "WARNING")
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1805,114 +2125,141 @@ if __name__ == '__main__':
 ### VANILLA SETTINGS GENERATION
 ########################################################################################################################
 
-def vanilla_monitor_log(filename=VANILLA_LOG_FILE, keywords=[log_key_start,log_key_stop]):
+def table_is_not_empty(table_name):
     try:
-        import subprocess
-        run_command("> "+VANILLA_LOG_FILE)
-        tail_process = subprocess.Popen(['tail', '-f', filename], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)    
-        for line in tail_process.stdout:
-            for keyword in keywords:
-                if keyword in line:
-                    if keyword == log_key_start:
-                        vanilla_started_event.set()
-                        run_command("tmux send-keys -t "+VANILLA_SERVER_NAME+" \"quit\" C-m")
-                    if keyword == log_key_stop:
-                        vanilla_exit_event.set()
-                        break
-    except Exception as e:
-        logger(e, "ERROR")
-
-def start_vanilla_server():
-    try:
-        VANILLA_SERVER_CMD_START = os.path.join(SERVICE_FOLDER, "start-server.sh")+" -servername "+VANILLA_SERVER_NAME+" | tee "+VANILLA_LOG_FILE
-        VANILLA_TMUX_SESSION_START = "tmux new-session -d -s "+VANILLA_SERVER_NAME+" \""+VANILLA_SERVER_CMD_START+"\""
-        run_command(VANILLA_TMUX_SESSION_START)
-    except Exception as e:
-        logger(e, "ERROR")
-
-def stop_vanilla_server():
-    try:
-        vanilla_monitor_log_thread = threading.Thread(target=vanilla_monitor_log)
-        vanilla_monitor_log_thread.start()
-    except Exception as e:
-        logger(e, "ERROR")
-
-def tmux_session_is_still_open(tmux_session_name):
-    try:
-        command = f"tmux list-sessions | grep {tmux_session_name}"
-        output = run_command(command)
-        if output:
-            return True
-        return False
-    except Exception as e:
-        logger(e, "ERROR")
-        return False
-
-def regenerate_vanilla_settings():
-    try:
-        import time
-        global vanilla_started_event
-        global vanilla_exit_event
-        global vanilla_settings_event
-        vanilla_settings = 425
-        rm(VANILLA_SERVERINI_PATH)
-        rm(VANILLA_SANDBOXVARS_PATH)
-        start_vanilla_server()
-        stop_vanilla_server()
-        vanilla_started_event.wait()
-        reload_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS, table_name='vanilla')
-        Mods = get_setting('Mods')['value']
-        WorkshopItems = get_setting('WorkshopItems')['value']
-        set_setting_value('Mods', Mods, table_name='vanilla')
-        set_setting_value('WorkshopItems', WorkshopItems, table_name='vanilla')
-        vanilla_exit_event.wait()
-        counter = 0
-        while True:
-            vanilla_started_event = threading.Event()
-            vanilla_exit_event = threading.Event()
-            if not tmux_session_is_still_open(VANILLA_SERVER_NAME):
-                start_vanilla_server()
-                stop_vanilla_server()
-                vanilla_started_event.wait()
-                reload_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS, table_name='vanilla')
-                vanilla_settings_event.set()
-                break
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        cursor = conn.cursor()
+        cursor.execute(f'''SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name+"_settings"}';''')
+        row = cursor.fetchone()
+        if not row:
+            logger("Vanilla table does not exist", "DEBUG")
+            return False
+        else:
+            cursor.execute(f'''SELECT COUNT(*) FROM {table_name+"_settings"};''')
+            count = cursor.fetchone()[0]
+            if count > 0:
+                return True
             else:
-                time.sleep(1)
-                counter += 1
-                if counter == 60:
-                    w = "Vanilla setting generation is taking more than expected. Check the logs and the vanilla tmux session?"
-                    print(w)
-                    logger(w, "WARNING")
+                logger("Vanilla table is empty", "DEBUG")
+                return False
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
     except Exception as e:
-        vanilla_settings = 500
         logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
+
+class VanillaServerManager:
+    def __init__(self, server_name, log_file):
+        self.server_name = server_name
+        self.log_file = log_file
+        self.started_event = threading.Event()
+        self.exit_event = threading.Event()
+        self.settings_event = threading.Event()
+
+    def vanilla_monitor_log(self, keywords):
+        try:
+            import subprocess
+            run_command("> " + self.log_file)
+            tail_process = subprocess.Popen(['tail', '-f', self.log_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)    
+            for line in tail_process.stdout:
+                for keyword in keywords:
+                    if keyword in line:
+                        if keyword == log_key_start:
+                            self.started_event.set()
+                            run_command("tmux send-keys -t " + self.server_name + " \"quit\" C-m")
+                        if keyword == log_key_stop:
+                            self.exit_event.set()
+                            break
+        except Exception as e:
+            logger(e, "ERROR")
+
+    def start_vanilla_server(self):
+        try:
+            server_cmd = os.path.join(SERVICE_FOLDER, "start-server.sh") + " -servername " + self.server_name + " | tee " + self.log_file
+            tmux_session_cmd = "tmux new-session -d -s " + self.server_name + " \"" + server_cmd + "\""
+            run_command(tmux_session_cmd)
+        except Exception as e:
+            logger(e, "ERROR")
+
+    def stop_vanilla_server(self):
+        try:
+            monitor_log_thread = threading.Thread(target=self.vanilla_monitor_log, args=([log_key_start,log_key_stop],))
+            monitor_log_thread.start()
+        except Exception as e:
+            logger(e, "ERROR")
+
+    def vanilla_tmux_is_open(self):
+        try:
+            return run_command(f"tmux list-sessions | grep {self.server_name}")[0]
+        except Exception as e:
+            logger(e, "ERROR")
+            return False
+
+    def regenerate_vanilla_settings(self):
+        try:
+            import time
+            global VANILLA_SETTINGS
+            VANILLA_SETTINGS = 425
+            rm(VANILLA_SERVERINI_PATH)
+            rm(VANILLA_SANDBOXVARS_PATH)
+            self.start_vanilla_server()
+            self.stop_vanilla_server()
+            self.started_event.wait()
+            reload_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS, table_name=self.server_name)
+            set_setting_value('Mods', get_setting('Mods')['value'], table_name=self.server_name)
+            set_setting_value('WorkshopItems', get_setting('WorkshopItems')['value'], table_name=self.server_name)
+            self.exit_event.wait()
+            counter = 0
+            while True:
+                self.started_event = threading.Event()
+                self.exit_event = threading.Event()
+                if not self.vanilla_tmux_is_open():
+                    self.start_vanilla_server()
+                    self.stop_vanilla_server()
+                    self.started_event.wait()
+                    reload_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS, table_name=self.server_name)
+                    VANILLA_SETTINGS = True
+                    self.settings_event.set()
+                    break
+                else:
+                    time.sleep(1)
+                    counter += 1
+                    if counter == 60:
+                        logger("Vanilla setting generation is taking more than expected. Check the logs and the vanilla tmux session?", "WARNING")
+        except Exception as e:
+            VANILLA_SETTINGS = 500
+            logger(e, "ERROR")
 
 if __name__ == '__main__':
     try:
-        vanilla_settings = reload_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS, table_name='vanilla')
-        vanilla_started_event = threading.Event()
-        vanilla_exit_event = threading.Event()
-        vanilla_settings_event = threading.Event()
-        regenerate_setting_thread = threading.Thread(target=regenerate_vanilla_settings)
+        VANILLA_SETTINGS = table_is_not_empty(VANILLA_SERVER_NAME)
+        vanilla_manager = VanillaServerManager(VANILLA_SERVER_NAME, VANILLA_LOG_FILE)
         if AUTOUPDATE_VANILLA_SETTINGS_ON_START == 1:
-            regenerate_setting_thread.start()
+            vanilla_manager.regenerate_vanilla_settings()
         elif AUTOUPDATE_VANILLA_SETTINGS_ON_START == 2:
-            if get_setting('Mods')['value'] != get_setting('Mods', table_name='vanilla')['value'] or not vanilla_settings:
-                regenerate_setting_thread.start()
+            if VANILLA_SETTINGS is not True or get_setting('Mods')['value'] != get_setting('Mods', table_name=VANILLA_SERVER_NAME)['value']:
+                vanilla_manager.regenerate_vanilla_settings()
         elif AUTOUPDATE_VANILLA_SETTINGS_ON_START == 0:
-            if not vanilla_settings:
-                vanilla_settings = 404
+            VANILLA_SETTINGS = reload_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS, table_name=VANILLA_SERVER_NAME)
+            if not VANILLA_SETTINGS:
+                VANILLA_SETTINGS = 404
         else:
-            vanilla_settings = 500
-            logger("", "ERROR")
+            VANILLA_SETTINGS = 500
+            logger("Unsupported value for AUTOUPDATE_VANILLA_SETTINGS_ON_START. Please use 0, 1, or 2.", "ERROR", need_traceback=False)
     except Exception as e:
-        vanilla_settings = 500
+        VANILLA_SETTINGS = 500
         logger(e, "ERROR")
 
 ########################################################################################################################
 ### POLLING MANAGER & MONITOR
 ########################################################################################################################
+
+def poll_expiration_manager():
+    pass
 
 def create_poll(chat_id, description, options, anonymous=False, multiple_answers=False):
     try:
@@ -2125,39 +2472,13 @@ def create_reform(message, ctype, change):
         logger(e, "ERROR")
 
 ########################################################################################################################
-### MAIN - LAUNCH SERVER
-########################################################################################################################
-
-def start_game_server():
-    try:
-        run_pending_queries()
-        if run_command(f"{SERVICE_MANAGER} --start"):
-            logger(f"Game server was started on tmux session \"{SERVICE_MANAGER}\"", "INFO")
-    except Exception as e:
-        logger(e, "ERROR")
-
-if __name__ == '__main__':
-    try:
-        import sys
-        start_pzserver_flag = '--startserver' in sys.argv
-        if start_pzserver_flag:
-            if not tmux_session_is_still_open(SERVICE_NAME):
-                import threading
-                pz_game_server_thread = threading.Thread(target=start_game_server)
-                pz_game_server_thread.start()
-            else:
-                logger(f"The game server tmux session (\"{SERVICE_NAME}\") is already/still up. I won't launch another instance.", "INFO")
-    except Exception as e:
-        logger(e, "ERROR")
-
-########################################################################################################################
 ### MAIN - COMMAND HANDLERS
 ########################################################################################################################
 
 if __name__ == '__main__':
     try:
         # SHOW CHAT ID
-        @bot.message_handler(commands=['id'])
+        @bot.message_handler(commands=[id_cmd])
         def id_command(message):
             print(f"CHAT ID: {message.chat.id}")
             reply_to(message, f"CHAT ID: {message.chat.id}")
@@ -2169,6 +2490,10 @@ if __name__ == '__main__':
         @bot.message_handler(commands=[help_cmd])
         def help_command(message):
             reply_to(message, help_msg, disable_web_page_preview=True)
+        # HELP!
+        @bot.message_handler(commands=[help_cmd+'!'])
+        def help_command(message):
+            reply_to(message, complete_help_msg, disable_web_page_preview=True)
         # STATUS
         @bot.message_handler(commands=[status_cmd])
         def status_command(message):
@@ -2201,9 +2526,9 @@ if __name__ == '__main__':
                     for chunk in text_chunks:
                         reply_to(message, chunk, parse_mode='HTML')
                     return True
-                if vanilla_settings not in [500, 404, 425]:
+                if VANILLA_SETTINGS is True:
                     send_diff()
-                elif vanilla_settings == 425:
+                elif VANILLA_SETTINGS == 425:
                     reply_to(message, "Vanilla settings are being generated. Please wait.")
                     import threading
                     def send_diff_when_ready():
@@ -2211,23 +2536,12 @@ if __name__ == '__main__':
                         send_diff()
                     send_diff_later = threading.Thread(target=send_diff_when_ready)
                     send_diff_later.start()
-                elif vanilla_settings == 500:
+                elif VANILLA_SETTINGS == 500:
                     reply_to(message, "A error prevented vanilla settings generation.")
-                elif vanilla_settings == 404:
+                elif VANILLA_SETTINGS == 404:
                     reply_to(message, "Vanilla settings were not found. Provide the setting file or enable autogeneration.")
             else:
                 reply_to(message, compare_msg_helper)
-        # SET SETTING DEFAULT
-        @bot.message_handler(commands=[set_default_cmd])
-        def set_setting_defaults_command(message):
-            if member_is_dev(message):
-                command = message.text.split()
-                if len(command) == 1:
-                    run_command(f"cp {serverini[0]} {DEFAULT_serverini[0]}")
-                    run_command(f"cp {sandboxvars[0]} {DEFAULT_sandboxvars[0]}")
-                    reply_to(message, "New defaults have been set based on current settings")
-                else:
-                    reply_to(message, set_default_msg_helper)
         # STATS
         @bot.message_handler(commands=[stats_cmd])
         def stats_command(message):
@@ -2266,61 +2580,60 @@ if __name__ == '__main__':
                     reply_to(message, f"This is not a valid steam ID.")
             else:
                 reply_to(message, register_msg_helper, disable_web_page_preview=True)
+        if not SYSTEMCTL:
         # RENAME
-        @bot.message_handler(commands=[rename_cmd])
-        def rename_command(message):
-            def schedule_rename(new, old, steam_id):
-                def rename_query(table, new, old, steam_id):
-                    return f"UPDATE {table} SET username = '{new}' WHERE username = '{old}' AND steam_id = {steam_id}"
-                pending_query_type = 'rename'
-                updated = delete_pending_rename(old, steam_id)
-                add_to_pending_queries(pending_query_type, ZOMBOID_SERVER_DB, rename_query('whitelist', new, old, steam_id), message.chat.id, message.id)
-                add_to_pending_queries(pending_query_type, ZOMBOID_PLAYER_DB, rename_query('networkPlayers', new, old, steam_id), message.chat.id, message.id)
-                add_to_pending_queries(pending_query_type, pztgdb, rename_query('players', new, old, steam_id), message.chat.id, message.id)
-                msg = f"Character \"{old}\" will be renamed to \"{new}\" on next reboot unless a new player joins with this username before then."
-                if not updated:
-                    reply_to(message, msg)
-                else:
-                    reply_to(message, f"{msg} Previous change has been canceled.")
-            steam_id = user_is_registered(message.from_user.id)
-            if steam_id:
-                import re
-                usernames = re.findall(r'"([^"]+)"', message.text)
-                forbidden_chars = ['/','?','"','$',"'",'.',';',',']
-                if len(usernames) == 2:
-                    old  = usernames[0]
-                    new = usernames[1]
-                    if all(len(username)< 20 for username in usernames):
-                        if not any(forbidden in username for username in usernames for forbidden in forbidden_chars):
-                            if new not in get_player_list():
-                                pending = get_pending_rename_data()
-                                if not pending:
-                                    schedule_rename(new, old, steam_id)
-                                else:
-                                    you_are_a_fucker = you_are_late = its_your_lucky_day = False
-                                    for ID, old_username, new_username, steam_id in pending:
-                                        if new == new_username and old == old_username:
-                                            you_are_a_fucker = True
-                                        elif new == new_username and old != old_username:
-                                            you_are_late = True
-                                        else:
-                                            its_your_lucky_day = True
-                                    if its_your_lucky_day:
-                                        schedule_rename(new, old, steam_id)
-                                    elif you_are_a_fucker:
-                                        reply_to(message, "This request has been already recorded, but it won't be implemented until next reboot.")
-                                    elif you_are_late:
-                                        reply_to(message, "Another player already submitted a request for this name change before you.")
-                            else:
-                                reply_to(message, "Character name cannot be the same as one of an existing player.")
-                        else:
-                            reply_to(message, "Character names cannot include these characters:\n/ ? \" $ ' . , ;")
+            @bot.message_handler(commands=[rename_cmd])
+            def rename_command(message):
+                def schedule_rename(new, old, steam_id):
+                    pending_query_type = 'rename'
+                    updated = delete_pending_rename(old, steam_id)
+                    add_to_pending_queries(pending_query_type, ZOMBOID_SERVER_DB, f"UPDATE whitelist SET username = '{new}' WHERE username = '{old}' AND steamid = {steam_id}", message.chat.id, message.id)
+                    add_to_pending_queries(pending_query_type, ZOMBOID_PLAYER_DB, f"UPDATE networkPlayers SET username = '{new}' WHERE username = '{old}'", message.chat.id, message.id)
+                    add_to_pending_queries(pending_query_type, pztgdb, f"UPDATE players SET username = '{new}' WHERE username = '{old}' AND steam_id = {steam_id}", message.chat.id, message.id)
+                    msg = f"Character \"{old}\" will be renamed to \"{new}\" on next reboot unless a new player joins with this username before then."
+                    if not updated:
+                        reply_to(message, msg)
                     else:
-                        reply_to(message, "The maximum lenght of a username is 20 characters")
+                        reply_to(message, f"{msg} Previous change has been canceled.")
+                steam_id = user_is_registered(message.from_user.id)
+                if steam_id:
+                    import re
+                    usernames = re.findall(r'"([^"]+)"', message.text)
+                    forbidden_chars = ['/','?','"','$',"'",'.',';',',']
+                    if len(usernames) == 2:
+                        old  = usernames[0]
+                        new = usernames[1]
+                        if all(len(username)< 20 for username in usernames):
+                            if not any(forbidden in username for username in usernames for forbidden in forbidden_chars):
+                                if new not in get_player_list():
+                                    pending = get_pending_rename_data()
+                                    if not pending:
+                                        schedule_rename(new, old, steam_id)
+                                    else:
+                                        you_are_a_fucker = you_are_late = its_your_lucky_day = False
+                                        for ID, old_username, new_username, steam_id in pending:
+                                            if new == new_username and old == old_username:
+                                                you_are_a_fucker = True
+                                            elif new == new_username and old != old_username:
+                                                you_are_late = True
+                                            else:
+                                                its_your_lucky_day = True
+                                        if its_your_lucky_day:
+                                            schedule_rename(new, old, steam_id)
+                                        elif you_are_a_fucker:
+                                            reply_to(message, "This request has been already recorded, but it won't be implemented until next reboot.")
+                                        elif you_are_late:
+                                            reply_to(message, "Another player already submitted a request for this name change before you.")
+                                else:
+                                    reply_to(message, "Character name cannot be the same as one of an existing player.")
+                            else:
+                                reply_to(message, "Character names cannot include these characters:\n/ ? \" $ ' . , ;")
+                        else:
+                            reply_to(message, "The maximum lenght of a username is 20 characters")
+                    else:
+                        reply_to(message, rename_msg_helper)
                 else:
-                    reply_to(message, rename_msg_helper)
-            else:
-                reply_to(message, register_msg_helper)                                        
+                    reply_to(message, register_msg_helper)                                    
         # RESTART
         @bot.message_handler(commands=[restart_cmd])
         def restart_command(message):
@@ -2331,17 +2644,27 @@ if __name__ == '__main__':
                 else:
                     reply_to(message, "The server is currently down.")
         @bot.message_handler(commands=[restart_confirm_cmd])
-        def confirm_restart_command(message):
-            restart_required = check_restart(restart_cmd, message.from_user.id)
-            if restart_required:
-                clear_restart(message.from_user.id)
-                run_command("sudo systemctl restart "+SERVICE_NAME)
+        def confirm_restart_command(message, force=False):
+            def execute_restart():
+                if not SYSTEMCTL:
+                    game_manager.restart()
+                else:
+                    run_command(f"sudo systemctl restart {SERVICE_NAME}")
+            if not force:
+                restart_required = check_restart(restart_cmd, message.from_user.id)
+                if restart_required:
+                    clear_restart(message.from_user.id)
+                    threading.Thread(target=execute_restart).start()
+                    reply_to(message, "The server is restarting...")
+            else:
+                threading.Thread(target=execute_restart).start()
+                reply_to(message, "The server is restarting...")
         @bot.message_handler(commands=[restart_cancel_cmd])
         def cancel_restart_command(message):
             clear_restart(message.from_user.id)
         # MOD INSTALL / UNINSTALL
         @bot.message_handler(commands=[mod_cmd])
-        def mod_command(message):
+        def mod_command(message, force=False):
             def list_mod_cmd():
                 modid_list, workshopid_list = get_valid_modid_workshopid_list()
                 if not len(modid_list) and not len(workshopid_list):
@@ -2372,7 +2695,7 @@ if __name__ == '__main__':
                 else:
                     reply_to(message, msg_no_mods_installed)
                     logger("Something must be wrong with the mod lists... Please check the config file.", "WARNING")
-            def install_uninstall_mod_cmd(action, valid_IDs, source, force=False):
+            def install_uninstall_mod_cmd(action, valid_IDs, source):
                 if valid_IDs:
                     modid, workshopid = valid_IDs
                     is_installed = mod_is_installed(modid, workshopid)
@@ -2409,7 +2732,7 @@ if __name__ == '__main__':
                         reply_to(message,  msg_workshopid_from_file_failed)
                     else:
                         reply_to(message, msg_unhandled_exception)
-            def install_uninstall_mod_cmd_handler(command=None, force=False):
+            def install_uninstall_mod_cmd_handler():
                 if not command:
                     command = message.text.split()
                 if len(command) == 3:
@@ -2430,10 +2753,6 @@ if __name__ == '__main__':
                     install_uninstall_mod_cmd_handler()
                 elif command[1] == 'move' and len(command) == 4 and string_is_integer(command[2]) and string_is_integer(command[3]):
                     move_mod(int(command[2]), int(command[3]))
-                elif command[1] == 'force' and len(command) in range(3,6):
-                    if member_is_dev(message):
-                        command.pop(1)
-                        install_uninstall_mod_cmd_handler(command, force=True)
                 else:
                     reply_to(message, mod_msg_helper)
             else:
@@ -2441,7 +2760,7 @@ if __name__ == '__main__':
         # MODIFY PZSERVER SETTINGS
         @bot.message_handler(commands=[setting_cmd])
         def setting_command(message, force=False):
-            def set_setting_cmd_handler(command, force=False):
+            def set_setting_cmd_handler(command):
                 if command[2] in ["ServerWelcomeMessage", "Map", "PublicName", "PublicDescription", "DiscordChannel"]: # Exception List
                     import re
                     match = re.match(r"/setting set (\w+) (.+)", message.text)
@@ -2475,19 +2794,40 @@ if __name__ == '__main__':
                             reply_to(message, setting_info_text)
                     else:
                         reply_to(message, f"\"*{command[3]}*\" is not a setting of this server.")
-                if len(command) == 5 and command[1] == 'force' and command[2] == 'set':
-                    if get_setting(command[3]):
-                        if member_is_dev(message):
-                            command.pop(1)
-                            set_setting_cmd_handler(command, force=True)
-                    else:
-                        reply_to(message, f"\"*{command[3]}*\" is not a setting of this server.")
+                else:
+                    reply_to(message, setting_msg_helper)
             else:
                 reply_to(message, setting_msg_helper)
         # LISTEN FOR UPDATES FROM YOUR NON-ANONYMOUS POLLS
         @bot.poll_answer_handler()
         def poll_vote_event(update):
             update_poll_vote(update.user.id, update.poll_id, update.option_ids)
+        # FORCE
+        @bot.message_handler(commands=[force_cmd])
+        def force_command(message):
+            try:
+                command = message.text.split()
+                if member_is_dev(message):
+                    if len(command) >= 2:
+                        if command[1] == setting_cmd:
+                            command.pop(0)
+                            message.text = ' '.join(command)
+                            setting_command(message, force=True)
+                        elif command[1] == mod_cmd:
+                            command.pop(0)
+                            message.text = ' '.join(command)
+                            mod_command(message, force=True)
+                        elif len(command) == 2 and command[1] == restart_cmd:
+                            message.text = restart_confirm_cmd
+                            confirm_restart_command(message, force=True)
+                        else:
+                            reply_to(message, msg_force_cmd_incorrect_syntax)
+                    else:
+                        reply_to(message, msg_force_cmd_incorrect_syntax)
+                else:
+                    reply_to(message, msg_only_master)
+            except Exception as e:
+                logger(e, "ERROR")
 
         ########################################
         ### TELEBOT - START POLLING
