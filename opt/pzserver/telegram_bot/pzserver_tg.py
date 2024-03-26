@@ -230,12 +230,28 @@ def check_service_status(service_name=SERVICE_NAME):
     except Exception as e:
         logger(e, "ERROR")
         return None
-
+    
+# THE TEAM, THE TEAM, GO TEAM, GO SPORTS
+#img_url = run_command("curl -kl "+workshop_url+" | grep \"steamuserimages-a.akamaihd.net/ugc\" | grep \"letterbox=true\" | head -1 | awk \'{print $2}\'").split("?")[0][1:]
 def strip_img_url_from_steam(workshop_url):
     try:
-        img_url = run_command("curl -kl "+workshop_url+" | grep \"steamuserimages-a.akamaihd.net/ugc\" | egrep -v \"property|twitter\" | grep \"letterbox=true\" | head -1 | awk \'{print $2}\'").split("?")[0][1:]
-        logger(f"A image url has been stripped from steam workshop: {img_url}", "INFO")
-        return img_url
+        import re
+        import requests
+        response = requests.get(workshop_url)
+        if response.status_code == 200:
+            html_source = response.text
+            pattern = r'https://steamuserimages-a\.akamaihd\.net/ugc/\d+/\w+/'
+            match = re.search(pattern, html_source)
+            if match:
+                img_url = match.group()
+                logger(f"A image url has been stripped from steam workshop: {img_url}", "DEBUG")
+                return img_url
+            else:
+                logger(f"There was no match while searching for a valid image url in: {workshop_url}", "DEBUG")
+                return None
+        else:
+            logger(f"Failed to fetch HTML content from: {workshop_url}, Status code: {response.status_code}", "ERROR")
+            return None
     except Exception as e:
         logger(e, "ERROR")
 
@@ -2311,7 +2327,7 @@ def stop_poll(reform=None, poll_id=None):
     except Exception as e:
         logger(e, "ERROR")
 
-def deny_change(reform=None, poll_id=None):
+def deny_change(reform=None, poll_id=None, reason=""):
     try:
         if not reform:
             reform = get_reform_by_poll_id(poll_id)
@@ -2319,11 +2335,11 @@ def deny_change(reform=None, poll_id=None):
         reform.reform_implemented = 0
         save_reform(reform)
         #reform.print_all()
-        reply_to(fake_message(reform.reform_chat_id, reform.poll_message_id), msg_change_rejected)
+        reply_to(fake_message(reform.reform_chat_id, reform.poll_message_id), f"{msg_change_rejected} {reason}")
     except Exception as e:
         logger(e, "ERROR")
 
-def implement_change(reform=None, poll_id=None):
+def implement_change(reform=None, poll_id=None, reason=""):
     try:
         if not reform:
             reform = get_reform_by_poll_id(poll_id)
@@ -2340,7 +2356,7 @@ def implement_change(reform=None, poll_id=None):
         reform.reform_implemented = 1
         save_reform(reform)
         #reform.print_all()
-        reply_to(fake_message(reform.reform_chat_id, reform.poll_message_id), msg_change_implemented)
+        reply_to(fake_message(reform.reform_chat_id, reform.poll_message_id), f"{msg_change_implemented} {reason}")
     except Exception as e:
         logger(e, "ERROR")
 
@@ -2365,25 +2381,25 @@ def consensus(reform, poll_id=None, votes_from = 'db', consensus=False, virdict=
                         votes = yes_votes + no_votes
                         if votes >= QUORUM * max_voters:
                             if yes_votes >= votes * UNANIMITY_COEFFICIENT:
-                                consensus, virdict = (True, True)
+                                consensus, virdict, reason = (True, True, f"Quorum of {QUORUM*100}% has been reached within {MINIMUM_DAYS} days and unaminity parameter of {UNANIMITY_COEFFICIENT*100}% has been met.")
                                 reform.poll_consensus_coefficient = yes_votes / max_voters
                             elif no_votes >= votes * UNANIMITY_COEFFICIENT:
-                                consensus, virdict = (True, False)
+                                consensus, virdict, reason = (True, False, f"Quorum of {QUORUM*100}% has been reached within {MINIMUM_DAYS} days and unaminity parameter of {UNANIMITY_COEFFICIENT*100}% has been met.")
                                 reform.poll_consensus_coefficient = no_votes / max_voters
                     else:
                         if yes_votes >= relative_majority:
-                            consensus, virdict = (True, True)
+                            consensus, virdict, reason = (True, True, f"The majority of the users ({yes_votes} out of {max_voters}) has expressed its will within {POLL_EXPIRE_AFTER} days from the submission of the poll.")
                             reform.poll_consensus_coefficient = yes_votes / max_voters
                         elif no_votes >= relative_majority:
-                            consensus, virdict = (True, False)
+                            consensus, virdict, reason = (True, False, f"The majority of the users ({yes_votes} out of {max_voters}) has expressed its will within {POLL_EXPIRE_AFTER} days from the submission of the poll.")
                             reform.poll_consensus_coefficient = no_votes / max_voters
             elif votes_from == 'tg':
                 pass # Alternative that I probably won't implement since the current solution works well.
         if consensus:
             if virdict:
-                implement_change(reform)
+                implement_change(reform, reason)
             else:
-                deny_change(reform)
+                deny_change(reform, reason)
             stop_poll(reform)
             return (consensus, virdict)
         else:
@@ -2454,9 +2470,12 @@ def mod_poll_launch(new_reform, workshop_url):
 
 def mod_poll_img(new_reform, workshop_url):
     try:
-        get_steam_image_url = strip_img_url_from_steam(workshop_url) 
-        bot.send_photo(new_reform.reform_chat_id, get_steam_image_url)
-        return True
+        get_steam_image_url = strip_img_url_from_steam(workshop_url)
+        if get_steam_image_url:
+            bot.send_photo(new_reform.reform_chat_id, get_steam_image_url)
+            return True
+        else:
+            return False
     except Exception as e:
         logger(e, "ERROR")
 
@@ -2527,7 +2546,7 @@ def poll_expiration_manager():
                         if reform.reform_date + day*MINIMUM_DAYS < unix_timestamp():
                             consensus(reform, expedite_approval_process=True)
                     if reform.reform_date + expiration < unix_timestamp():
-                        deny_change(reform)
+                        deny_change(reform, reason=f"{POLL_EXPIRE_AFTER} days passed since its proposal.")
                         stop_poll(reform)
             time.sleep(3600)
     except Exception as e:
@@ -2798,17 +2817,16 @@ if __name__ == '__main__':
                     else:
                         reply_to(message, msg_unhandled_exception)
             def install_uninstall_mod_cmd_handler():
-                if not command:
-                    command = message.text.split()
+                command = message.text.split()
                 if len(command) == 3:
                     if is_workshop_url(command[2]):
-                        install_uninstall_mod_cmd(command[1], strip_IDs_from_steam(command[2]), 'url', force)
+                        install_uninstall_mod_cmd(command[1], strip_IDs_from_steam(command[2]), 'url')
                     elif command[1] == 'uninstall' and is_modid(command[2]):
-                        install_uninstall_mod_cmd(command[1], sort_valid_modid_workshopid(command[2], get_workshopid_from_installed_mods(command[2])), 'file', force)
+                        install_uninstall_mod_cmd(command[1], sort_valid_modid_workshopid(command[2], get_workshopid_from_installed_mods(command[2])), 'file')
                     else:
                         reply_to(message, mod_msg_helper)
                 elif len(command) == 4:
-                    install_uninstall_mod_cmd(command[1], sort_valid_modid_workshopid(command[2], command[3]), 'command', force)
+                    install_uninstall_mod_cmd(command[1], sort_valid_modid_workshopid(command[2], command[3]), 'command')
             # Alright...
             command = message.text.split()
             if len(command) in range(2,6):
