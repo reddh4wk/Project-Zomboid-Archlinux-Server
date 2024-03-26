@@ -1,3 +1,5 @@
+#!/opt/pzserver/python/bin/python
+
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@    (@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.    @@@@@@@@@@@@@@@@@@@@@@@@@@@@
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@, %@@@@@@@@@@@@@@@@@@@@@@@@@@@@
@@ -53,6 +55,7 @@ import os
 import sys
 import threading
 import signal
+import re
 
 if __name__ == '__main__':
     if '--debug' in sys.argv:
@@ -62,9 +65,9 @@ if __name__ == '__main__':
 
 if __name__ == '__main__':
     # USEFUL PATHS OF RECURRENT USAGE
-    FILENAME = os.path.basename(__file__)
+    FILENAME = os.path.basename(os.path.realpath(__file__))
     BASENAME = os.path.splitext(FILENAME)[0]
-    THIS_FOLDER = os.path.abspath(os.path.dirname(__file__))
+    THIS_FOLDER = os.path.dirname(os.path.realpath(__file__))
     THIS_LOG_FILE = os.path.join(THIS_FOLDER, BASENAME+'.log')
     SERVICE_FOLDER = os.path.abspath(os.path.join(THIS_FOLDER, os.pardir))
     SERVICE_NAME = os.path.basename(SERVICE_FOLDER) # Please put the server in a folder with a name different form "vanilla" or "default"
@@ -97,7 +100,7 @@ if __name__ == '__main__':
     DEVS=[] #Your telegram ID. It will allow you to force changes.
     
     # POLL SETTINGS
-    POLL_EXPIRE_AFTER = 7                       # After this number of days, a poll expires and gets closed
+    POLL_EXPIRE_AFTER = 7                   # After this number of days, a poll expires and gets closed
     MISOABSTINENTIA = True                  # If this is set to true, a poll can pass before the expire period without reaching the consensus (WC mode)
     QUORUM = 0.5                            # At least this percentage of the people that create consensus need to vote even in WC mode.
     MINIMUM_DAYS = 3                        # At least this amount of days need to pass before the poll is approved even in WC mode.
@@ -118,15 +121,14 @@ def log_timestamp():
 def logger(message, msg_type, log_file=THIS_LOG_FILE, need_traceback=True):
     import os
     import traceback
+    import sys
+    silent_flag = '--silent' in sys.argv
     with open(log_file, 'a') as f:
         timestamp = log_timestamp()
         msg_body = f"[{timestamp}][{msg_type}] {str(message)}"
-        if DEBUG_MODE:
-            print(msg_body)
-        if msg_type != 'DEBUG':
-            f.write(msg_body+"\n")
-        else:
-            if DEBUG_MODE:
+        if not silent_flag:
+            if msg_type != 'DEBUG' or DEBUG_MODE:
+                print(msg_body)
                 f.write(msg_body+"\n")
         traceback_str = traceback.format_exc()
         if msg_type in ['ERROR','SQL_ERROR'] and need_traceback:
@@ -231,8 +233,6 @@ def check_service_status(service_name=SERVICE_NAME):
         logger(e, "ERROR")
         return None
     
-# THE TEAM, THE TEAM, GO TEAM, GO SPORTS
-#img_url = run_command("curl -kl "+workshop_url+" | grep \"steamuserimages-a.akamaihd.net/ugc\" | grep \"letterbox=true\" | head -1 | awk \'{print $2}\'").split("?")[0][1:]
 def strip_img_url_from_steam(workshop_url):
     try:
         import re
@@ -357,12 +357,15 @@ def is_already_running(current_pid, current_script):
     except Exception as e:
         logger(e, "ERROR")
 
-def stop_previous_instance(pid):
+def stop_previous_instance(pid, signal_type):
     try:
         import os
         import signal
         logger(f"Stopping previous instance with PID: {pid}", "INFO")
-        os.kill(pid, signal.SIGKILL)
+        if signal_type == 'violent':
+            os.kill(pid, signal.SIGKILL)
+        if signal_type == 'graceful':
+            os.kill(pid, signal.SIGTERM)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -372,6 +375,7 @@ if __name__ == '__main__':
         pid, name = get_pid_and_name()
         restart_flag = '--restart' in sys.argv
         stop_flag = '--stop' in sys.argv
+        shutdown_flag = '--shutdown' in sys.argv
         already_running, running_pid = is_already_running(pid, name)
         if restart_flag and stop_flag:
             logger("Flags --restart and --stop cannot be called at the same time", "ERROR", need_traceback=False)
@@ -379,19 +383,27 @@ if __name__ == '__main__':
         if already_running:
             if restart_flag:
                 if running_pid:
-                    stop_previous_instance(running_pid)
+                    stop_previous_instance(running_pid, 'violent')
                 else:
                     logger("Couldn't determine the PID of the previous instance.", "ERROR", need_traceback=False)
                     sys.exit(1)
             elif stop_flag:
                 if running_pid:
-                    stop_previous_instance(running_pid)
+                    stop_previous_instance(running_pid, 'violent')
                     sys.exit(0)
                 else:
                     logger("Couldn't determine the PID of the previous instance.", "ERROR", need_traceback=False)
                     sys.exit(1)
+            elif shutdown_flag:
+                if running_pid:
+                    stop_previous_instance(running_pid, 'graceful')
+                    sys.exit(0)
             else:
-                logger("Another instance of the script is already running.", "ERROR", need_traceback=False)
+                logger("Another penis of the script is already running.", "ERROR", need_traceback=False)
+                sys.exit(1)
+        else:
+            if stop_flag:
+                logger("The server isn't running already. Since the --stop flag has been used, exiting.", "ERROR", need_traceback=False)
                 sys.exit(1)
     except Exception as e:
         logger(e, "ERROR")
@@ -483,6 +495,11 @@ def split_msg_in_chunks(text, telegram_msg_max_lenght=4096):
 if __name__ == '__main__':
     import os
     pztgdb = os.path.join(THIS_FOLDER, 'pztg.db')
+    if DEBUG_MODE:
+        debug_db = os.path.join(THIS_FOLDER, 'pztg_debug.db')
+        run_command(f"cp {pztgdb} {debug_db}")
+        pztgdb = debug_db
+        logger(f"Debug database is being used: {debug_db}", "DEBUG")
 
 class Reform:
     def __init__(self, reform_id=None, reform_chat_id=None, reform_name=None, reform_description=None, reform_date=None, reform_implemented=None, reform_is_active = None,
@@ -2063,6 +2080,8 @@ class GameServerManager:
             game_bin_path = os.path.join(SERVICE_FOLDER, "start-server.sh")
             game_start_cmd = f"{game_bin_path} -servername {self.server_name} | tee {self.server_log_path}"
             game_server_tmux_session_start = f"tmux new-session -d -s {self.server_name} \"{game_start_cmd}\""
+            run_command(f"> {self.server_log_path}")
+            logger(f"Log file {self.server_log_path} cleaned before executing the server.", "DEBUG")
             r = run_command(game_server_tmux_session_start)
             if r[0]:
                 self.server_start_executed.set()
@@ -2078,8 +2097,12 @@ class GameServerManager:
                 
     def stop_cmd(self):
         try:
-            if run_command_on_gameserver(self.server_name, 'save')[0]:
-                if run_command_on_gameserver(self.server_name, 'quit')[0]:
+            save_cmd = run_command_on_gameserver(self.server_name, 'save')
+            logger(f"The launch of the save_cmd exited with code: {str(save_cmd[0])}", "DEBUG")
+            if save_cmd[0]:
+                quit_cmd = run_command_on_gameserver(self.server_name, 'quit')
+                logger(f"The launch of the save_cmd exited with code: {str(save_cmd[0])}", "DEBUG")
+                if quit_cmd[0]:
                     self.server_stop_executed.set()
                     timeout = 60
                     if self.execute_for_every_until_true(timeout,2,self.tmux_session_state,self.server_name,False):
@@ -2114,7 +2137,6 @@ class GameServerManager:
                 if not self.start_cmd():
                     logger(f"Failed to start the server \"{self.server_name}\".", "ERROR", need_traceback=False)
                     return
-            run_command(f"> {self.server_log_path}")
             threading.Thread(target=init_start).start()
             self.server_start_executed.wait()
             logger(f"Started game server \"{self.server_name}\".", "DEBUG")
@@ -2133,13 +2155,15 @@ class GameServerManager:
         try:
             threading.Thread(target=self.stop_cmd).start()
             self.server_stop_executed.wait()
-            logger(f"Stopped game server \"{self.server_name}\".", "DEBUG")
+            logger(f"Sent a save and quit command to \"{self.server_name}\" successsfully.", "DEBUG")
             self.server_stopping.wait()
             logger(f"Game Server \"{self.server_name}\" initiated a shut down.", "DEBUG")
             self.server_stopped.wait()
             logger(f"Game Server \"{self.server_name}\" has been shut down.", "INFO")
+            return True
         except Exception as e:
             logger(e, "ERROR")
+            return False
 
     def restart(self):
         try:
@@ -2155,14 +2179,17 @@ if __name__ == '__main__':
             game_manager = GameServerManager(SERVICE_NAME, SERVICE_LOG)
             def shutdown_signal_handler(sig, frame):
                 if sig == signal.SIGTERM:
-                    logger(f"System Shutdown has being called. Shutting down the server...", "INFO")
-                    game_manager.stop()
-                    os.kill(os.getpid(), signal.SIGKILL)
+                    logger(f"System Shutdown has being called. Issuing stop signal to the game server...", "INFO")
+                    if game_manager.stop():
+                        os.kill(os.getpid(), signal.SIGKILL)
+                    else:
+                        logger("Server .stop() function failed at shutting down the server.", "ERROR", need_traceback=True)
             signal.signal(signal.SIGTERM, shutdown_signal_handler)
             noserver_flag = '--noserver' in sys.argv
             if not noserver_flag:
                 if game_manager.tmux_session_state(SERVICE_NAME, True):
                     logger(f"The game server session \"{SERVICE_NAME}\" is already live. Aborting launch.", "INFO")
+                    
                     threading.Thread(target=game_manager.monitor_log).start()
                     logger(f"Log monitor started to parse \"{SERVICE_LOG}\"", "DEBUG")
                 else:
@@ -2288,13 +2315,16 @@ class VanillaServerManager:
 
 if __name__ == '__main__':
     try:
+        if DEBUG_MODE:
+            logger(f"Skipping vanilla generation. Setting AUTOUPDATE_VANILLA_SETTINGS_ON_START to 0", "DEBUG")
+            AUTOUPDATE_VANILLA_SETTINGS_ON_START = 0
         VANILLA_SETTINGS = table_is_not_empty(VANILLA_SERVER_NAME)
         vanilla_manager = VanillaServerManager(VANILLA_SERVER_NAME, VANILLA_LOG_FILE)
         if AUTOUPDATE_VANILLA_SETTINGS_ON_START == 1:
-            vanilla_manager.regenerate_vanilla_settings()
+            threading.Thread(target=vanilla_manager.regenerate_vanilla_settings).start()
         elif AUTOUPDATE_VANILLA_SETTINGS_ON_START == 2:
             if VANILLA_SETTINGS is not True or get_setting('Mods')['value'] != get_setting('Mods', table_name=VANILLA_SERVER_NAME)['value']:
-                vanilla_manager.regenerate_vanilla_settings()
+                threading.Thread(target=vanilla_manager.regenerate_vanilla_settings).start()
         elif AUTOUPDATE_VANILLA_SETTINGS_ON_START == 0:
             VANILLA_SETTINGS = reload_settings(VANILLA_SERVERINI, VANILLA_SANDBOXVARS, table_name=VANILLA_SERVER_NAME)
             if not VANILLA_SETTINGS:
@@ -2614,12 +2644,10 @@ if __name__ == '__main__':
                     send_diff()
                 elif VANILLA_SETTINGS == 425:
                     reply_to(message, "Vanilla settings are being generated. Please wait.")
-                    import threading
                     def send_diff_when_ready():
                         vanilla_settings_event.wait()
                         send_diff()
-                    send_diff_later = threading.Thread(target=send_diff_when_ready)
-                    send_diff_later.start()
+                    threading.Thread(target=send_diff_when_ready).start()
                 elif VANILLA_SETTINGS == 500:
                     reply_to(message, "A error prevented vanilla settings generation.")
                 elif VANILLA_SETTINGS == 404:
@@ -2664,7 +2692,6 @@ if __name__ == '__main__':
                     reply_to(message, f"This is not a valid steam ID.")
             else:
                 reply_to(message, register_msg_helper, disable_web_page_preview=True)
-        if not SYSTEMCTL:
         # RENAME
             @bot.message_handler(commands=[rename_cmd])
             def rename_command(message):
@@ -2680,44 +2707,47 @@ if __name__ == '__main__':
                     else:
                         reply_to(message, f"{msg} Previous change has been canceled.")
                 steam_id = user_is_registered(message.from_user.id)
-                if steam_id:
-                    import re
-                    usernames = re.findall(r'"([^"]+)"', message.text)
-                    forbidden_chars = ['/','?','"','$',"'",'.',';',',']
-                    if len(usernames) == 2:
-                        old  = usernames[0]
-                        new = usernames[1]
-                        if all(len(username)< 20 for username in usernames):
-                            if not any(forbidden in username for username in usernames for forbidden in forbidden_chars):
-                                if new not in get_player_list():
-                                    pending = get_pending_rename_data()
-                                    if not pending:
-                                        schedule_rename(new, old, steam_id)
-                                    else:
-                                        you_are_a_fucker = you_are_late = its_your_lucky_day = False
-                                        for ID, old_username, new_username, steam_id in pending:
-                                            if new == new_username and old == old_username:
-                                                you_are_a_fucker = True
-                                            elif new == new_username and old != old_username:
-                                                you_are_late = True
-                                            else:
-                                                its_your_lucky_day = True
-                                        if its_your_lucky_day:
+                if not SYSTEMCTL:
+                    if steam_id:
+                        import re
+                        usernames = re.findall(r'"([^"]+)"', message.text)
+                        forbidden_chars = ['/','?','"','$',"'",'.',';',',']
+                        if len(usernames) == 2:
+                            old  = usernames[0]
+                            new = usernames[1]
+                            if all(len(username)< 20 for username in usernames):
+                                if not any(forbidden in username for username in usernames for forbidden in forbidden_chars):
+                                    if new not in get_player_list():
+                                        pending = get_pending_rename_data()
+                                        if not pending:
                                             schedule_rename(new, old, steam_id)
-                                        elif you_are_a_fucker:
-                                            reply_to(message, "This request has been already recorded, but it won't be implemented until next reboot.")
-                                        elif you_are_late:
-                                            reply_to(message, "Another player already submitted a request for this name change before you.")
+                                        else:
+                                            you_are_a_fucker = you_are_late = its_your_lucky_day = False
+                                            for ID, old_username, new_username, steam_id in pending:
+                                                if new == new_username and old == old_username:
+                                                    you_are_a_fucker = True
+                                                elif new == new_username and old != old_username:
+                                                    you_are_late = True
+                                                else:
+                                                    its_your_lucky_day = True
+                                            if its_your_lucky_day:
+                                                schedule_rename(new, old, steam_id)
+                                            elif you_are_a_fucker:
+                                                reply_to(message, "This request has been already recorded, but it won't be implemented until next reboot.")
+                                            elif you_are_late:
+                                                reply_to(message, "Another player already submitted a request for this name change before you.")
+                                    else:
+                                        reply_to(message, "Character name cannot be the same as one of an existing player.")
                                 else:
-                                    reply_to(message, "Character name cannot be the same as one of an existing player.")
+                                    reply_to(message, "Character names cannot include these characters:\n/ ? \" $ ' . , ;")
                             else:
-                                reply_to(message, "Character names cannot include these characters:\n/ ? \" $ ' . , ;")
+                                reply_to(message, "The maximum lenght of a username is 20 characters")
                         else:
-                            reply_to(message, "The maximum lenght of a username is 20 characters")
+                            reply_to(message, rename_msg_helper)
                     else:
-                        reply_to(message, rename_msg_helper)
+                        reply_to(message, register_msg_helper)
                 else:
-                    reply_to(message, register_msg_helper)                                    
+                    reply_to(message, "This feature is available only if the server is launched through the integrated solution. Use that instead of systemctl if you want to use it, or implement it differently.")
         # RESTART
         @bot.message_handler(commands=[restart_cmd])
         def restart_command(message):
@@ -2816,8 +2846,7 @@ if __name__ == '__main__':
                         reply_to(message,  msg_workshopid_from_file_failed)
                     else:
                         reply_to(message, msg_unhandled_exception)
-            def install_uninstall_mod_cmd_handler():
-                command = message.text.split()
+            def install_uninstall_mod_cmd_handler(command):
                 if len(command) == 3:
                     if is_workshop_url(command[2]):
                         install_uninstall_mod_cmd(command[1], strip_IDs_from_steam(command[2]), 'url')
@@ -2827,19 +2856,45 @@ if __name__ == '__main__':
                         reply_to(message, mod_msg_helper)
                 elif len(command) == 4:
                     install_uninstall_mod_cmd(command[1], sort_valid_modid_workshopid(command[2], command[3]), 'command')
-            # Alright...
-            command = message.text.split()
-            if len(command) in range(2,6):
-                if command[1] == 'list' and len(command) == 2:
-                    list_mod_cmd()
-                elif command[1] in ['install', 'uninstall'] and len(command) in range(2,5):
-                    install_uninstall_mod_cmd_handler()
-                elif command[1] == 'move' and len(command) == 4 and string_is_integer(command[2]) and string_is_integer(command[3]):
-                    move_mod(int(command[2]), int(command[3]))
+            # Let's capture the text between quotes (some intelligent modders put spaces in the name of their mod)
+            try:
+                error = True
+                logger(f"Capturing message: {message.text}", "DEBUG")
+                command = message.text.split()
+                first = False
+                for e in message.text.split():
+                    if '"' in e:
+                        if not first:
+                            if e.count('"') < 2:
+                                f = command.index(e)
+                                first = True
+                            elif e.count('"') > 2:
+                                logger("Abnormal amount of \" detected in the command", "DEBUG")
+                                break
+                        elif first:
+                            s = command.index(e)
+                            command[f:s+1] = [' '.join(command[f:s+1])]
+                            first = False
+                command = [e.strip('"') if e.startswith('"') and e.endswith('"') else e for e in command]
+                error = False
+            except Exception as e:
+                logger(e, "ERROR")
+            if not error:
+            # Finally...
+                logger(f"Capturing mod command: {command}", "DEBUG")
+                if len(command) in range(2,6):
+                    if command[1] == 'list' and len(command) == 2:
+                        list_mod_cmd()
+                    elif command[1] in ['install', 'uninstall'] and len(command) in range(2,5):
+                        install_uninstall_mod_cmd_handler(command)
+                    elif command[1] == 'move' and len(command) == 4 and string_is_integer(command[2]) and string_is_integer(command[3]):
+                        move_mod(int(command[2]), int(command[3]))
+                    else:
+                        reply_to(message, mod_msg_helper)
                 else:
                     reply_to(message, mod_msg_helper)
             else:
-                reply_to(message, mod_msg_helper)
+                reply_to(message, "Abnormal amount of \" detected in the command")
         # MODIFY PZSERVER SETTINGS
         @bot.message_handler(commands=[setting_cmd])
         def setting_command(message, force=False):
