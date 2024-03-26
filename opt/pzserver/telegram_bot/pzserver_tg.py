@@ -97,11 +97,12 @@ if __name__ == '__main__':
     DEVS=[] #Your telegram ID. It will allow you to force changes.
     
     # POLL SETTINGS
-    POLL_EXPIRE_PERIOD = 7                  # After this number of days, a poll expires and gets closed
-    POLL_WC_CAN_PASS = True                 # If this is set to true, a poll can pass before the expire period without reaching the consensus (WC mode)
-    POLL_WC_PERC = 0.5                      # At least this percentage of the people that create consensus need to vote even in WC mode.
-    POLL_WC_PASS_AFTER = 3                  # At least this amount of days need to pass before the poll is approved even in WC mode.
-    POLL_WC_UNANIMITY_COEFFICIENT = 0.8     # At least this percentage of people need to agree for the WC mode pass.
+    POLL_EXPIRE_AFTER = 7                       # After this number of days, a poll expires and gets closed
+    MISOABSTINENTIA = True                  # If this is set to true, a poll can pass before the expire period without reaching the consensus (WC mode)
+    QUORUM = 0.5                            # At least this percentage of the people that create consensus need to vote even in WC mode.
+    MINIMUM_DAYS = 3                        # At least this amount of days need to pass before the poll is approved even in WC mode.
+    UNANIMITY_COEFFICIENT = 0.8             # At least this percentage of people need to agree for the WC mode pass.
+    BOTS_PRESENT_IN_THE_GROUP_CHAT = 1      # The amount of bots in the group chat, to exclude them from the count to calculate consensus
 
     # GAME SERVER MANAGER
     SYSTEMCTL = False
@@ -344,8 +345,8 @@ def stop_previous_instance(pid):
     try:
         import os
         import signal
-        print(f"Stopping previous instance with PID: {pid}")
-        os.kill(pid, signal.SIGTERM)
+        logger(f"Stopping previous instance with PID: {pid}", "INFO")
+        os.kill(pid, signal.SIGKILL)
     except Exception as e:
         logger(e, "ERROR")
 
@@ -354,16 +355,27 @@ if __name__ == '__main__':
         import sys
         pid, name = get_pid_and_name()
         restart_flag = '--restart' in sys.argv
+        stop_flag = '--stop' in sys.argv
         already_running, running_pid = is_already_running(pid, name)
+        if restart_flag and stop_flag:
+            logger("Flags --restart and --stop cannot be called at the same time", "ERROR", need_traceback=False)
+            sys.exit(1)
         if already_running:
             if restart_flag:
                 if running_pid:
                     stop_previous_instance(running_pid)
                 else:
-                    print("Couldn't determine the PID of the previous instance.")
+                    logger("Couldn't determine the PID of the previous instance.", "ERROR", need_traceback=False)
+                    sys.exit(1)
+            elif stop_flag:
+                if running_pid:
+                    stop_previous_instance(running_pid)
+                    sys.exit(0)
+                else:
+                    logger("Couldn't determine the PID of the previous instance.", "ERROR", need_traceback=False)
                     sys.exit(1)
             else:
-                print("Another instance of the script is already running.")
+                logger("Another instance of the script is already running.", "ERROR", need_traceback=False)
                 sys.exit(1)
     except Exception as e:
         logger(e, "ERROR")
@@ -995,6 +1007,29 @@ def get_reform(reform_id):
         result = c.fetchone()
         if result:
             return Reform(*result)
+        else:
+            return None
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
+    except Exception as e:
+        logger(e, "ERROR")
+    finally:
+        if conn:
+            conn.close()
+
+def get_active_reforms():
+    try:
+        import sqlite3
+        conn = sqlite3.connect(pztgdb)
+        c = conn.cursor()
+        c.execute('''SELECT * FROM reforms WHERE reform_is_active = 1''')
+        active_reforms = c.fetchall()
+        if active_reforms:
+            result = []
+            for reform in active_reforms:
+                result.append(Reform(*reform))
+            return result
         else:
             return None
     except sqlite3.Error as e:
@@ -1939,11 +1974,11 @@ class GameServerManager:
             import re
             if keyword == log_key_start:
                 self.server_started.set()
-                msg = SERVICE_NAME.capitalize()+" started."
+                msg = f"{self.server_name.capitalize()} is up and ready."
                 server_chat_message(msg)
             elif keyword == log_key_stop:
                 self.server_stopping.set()
-                msg = SERVICE_NAME.capitalize()+" stopped."
+                msg = f"{self.server_name.capitalize()} is shutting down..."
                 server_chat_message(msg)
             elif mod_fail_flag and keyword == log_key_mod_fail:
                 match = re.search(mod_fail_re_pattern, line)
@@ -1985,7 +2020,6 @@ class GameServerManager:
         try:
             import subprocess
             keywords=[log_key_start, log_key_stop, log_key_client_init, log_key_client_logout, log_key_cmd, log_key_mod_fail]
-            #run_command(f"> {self.server_log_path}")
             tail_process = subprocess.Popen(['tail', '-f', self.server_log_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             for line in tail_process.stdout: # Process each line as it is received
                 for keyword in keywords:
@@ -2064,17 +2098,16 @@ class GameServerManager:
                 if not self.start_cmd():
                     logger(f"Failed to start the server \"{self.server_name}\".", "ERROR", need_traceback=False)
                     return
+            run_command(f"> {self.server_log_path}")
             threading.Thread(target=init_start).start()
             self.server_start_executed.wait()
             logger(f"Started game server \"{self.server_name}\".", "DEBUG")
             self.server_starting.wait()
             logger(f"Started tmux session \"{self.server_name}\".", "DEBUG")
             threading.Thread(target=self.monitor_log).start()
-            logger(f"Started parsing {self.server_log_path}", "DEBUG")
+            logger(f"Log monitor started to parse \"{self.server_log_path}\"", "DEBUG")
             self.server_started.wait()
             logger(f"Game Server \"{self.server_name}\" successfully started.", "INFO")
-            threading.Thread(target=self.monitor_log).start()
-            logger(f"Log monitor started for \"{self.server_name}\"", "DEBUG")
             reload_settings()
             logger(f"Settings have been reloaded for \"{self.server_name}\"", "DEBUG")
         except Exception as e:
@@ -2108,11 +2141,14 @@ if __name__ == '__main__':
                 if sig == signal.SIGTERM:
                     logger(f"System Shutdown has being called. Shutting down the server...", "INFO")
                     game_manager.stop()
+                    os.kill(os.getpid(), signal.SIGKILL)
             signal.signal(signal.SIGTERM, shutdown_signal_handler)
             noserver_flag = '--noserver' in sys.argv
             if not noserver_flag:
                 if game_manager.tmux_session_state(SERVICE_NAME, True):
                     logger(f"The game server session \"{SERVICE_NAME}\" is already live. Aborting launch.", "INFO")
+                    threading.Thread(target=game_manager.monitor_log).start()
+                    logger(f"Log monitor started to parse \"{SERVICE_LOG}\"", "DEBUG")
                 else:
                     run_pending_queries()
                     threading.Thread(target=game_manager.start).start()
@@ -2258,9 +2294,6 @@ if __name__ == '__main__':
 ### POLLING MANAGER & MONITOR
 ########################################################################################################################
 
-def poll_expiration_manager():
-    pass
-
 def create_poll(chat_id, description, options, anonymous=False, multiple_answers=False):
     try:
         poll = bot.send_poll(chat_id, question=description, options=options, is_anonymous=anonymous, allows_multiple_answers=multiple_answers)
@@ -2311,31 +2344,41 @@ def implement_change(reform=None, poll_id=None):
     except Exception as e:
         logger(e, "ERROR")
 
-def consensus(reform=None, poll_id=None, votes_from = 'db', consensus = False, virdict = None):
+def consensus(reform, poll_id=None, votes_from = 'db', consensus=False, virdict=None, expedite_approval_process=False):
     try:
         if votes_from == 'db':
             if not reform:
                 reform = get_reform_by_poll_id(poll_id)
-        max_voters = bot.get_chat_members_count(reform.reform_chat_id) - 1 # At least one bot (this one) is in the count, so we detract one.
+        max_voters = bot.get_chat_members_count(reform.reform_chat_id) - BOTS_PRESENT_IN_THE_GROUP_CHAT # At least one bot (this one) is in the count, so we detract one.
         if reform.poll_options == 2:
-            consensus_threshold = max_voters // reform.poll_options + 1 # Majority threshold (for testing remove the +1 and be alone in a group with just the bot)
-        if votes_from == 'db':
-                if reform.poll_yes_list:
-                    yes_votes = len(reform.poll_yes_list.split(','))
-                else:
-                    yes_votes = 0
-                if reform.poll_no_list:
-                    no_votes = len(reform.poll_no_list.split(','))
-                else:
-                    no_votes = 0
-                if yes_votes >= consensus_threshold:
-                    consensus, virdict = (True, True)
-                    reform.poll_consensus_coefficient = yes_votes / consensus_threshold
-                elif no_votes >= consensus_threshold:
-                    consensus, virdict = (True, False)
-                    reform.poll_consensus_coefficient = no_votes / consensus_threshold
-        elif votes_from == 'tg':
-            pass
+            relative_majority = max_voters // 2 + 1 # Majority threshold (for testing remove the +1 and be alone in a group with just the bot)
+            if votes_from == 'db':
+                    if reform.poll_yes_list:
+                        yes_votes = len(reform.poll_yes_list.split(','))
+                    else:
+                        yes_votes = 0
+                    if reform.poll_no_list:
+                        no_votes = len(reform.poll_no_list.split(','))
+                    else:
+                        no_votes = 0
+                    if expedite_approval_process:
+                        votes = yes_votes + no_votes
+                        if votes >= QUORUM * max_voters:
+                            if yes_votes >= votes * UNANIMITY_COEFFICIENT:
+                                consensus, virdict = (True, True)
+                                reform.poll_consensus_coefficient = yes_votes / max_voters
+                            elif no_votes >= votes * UNANIMITY_COEFFICIENT:
+                                consensus, virdict = (True, False)
+                                reform.poll_consensus_coefficient = no_votes / max_voters
+                    else:
+                        if yes_votes >= relative_majority:
+                            consensus, virdict = (True, True)
+                            reform.poll_consensus_coefficient = yes_votes / max_voters
+                        elif no_votes >= relative_majority:
+                            consensus, virdict = (True, False)
+                            reform.poll_consensus_coefficient = no_votes / max_voters
+            elif votes_from == 'tg':
+                pass # Alternative that I probably won't implement since the current solution works well.
         if consensus:
             if virdict:
                 implement_change(reform)
@@ -2348,7 +2391,7 @@ def consensus(reform=None, poll_id=None, votes_from = 'db', consensus = False, v
         save_reform(reform)
     except Exception as e:
         logger(e, "ERROR")
-        
+
 def update_poll_vote(voter, poll_id, votes):
     try:
         reform = get_reform_by_poll_id(poll_id)
@@ -2470,6 +2513,28 @@ def create_reform(message, ctype, change):
                 reply_to(fake_message(clone.reform_chat_id, clone.poll_message_id), "This change has been already proposed and is under trial process.")
     except Exception as e:
         logger(e, "ERROR")
+
+def poll_expiration_manager():
+    try:
+        import time
+        day = 86400
+        expiration = day*POLL_EXPIRE_AFTER
+        while True:
+            active_reforms = get_active_reforms()
+            if active_reforms:
+                for reform in active_reforms:
+                    if MISOABSTINENTIA:
+                        if reform.reform_date + day*MINIMUM_DAYS < unix_timestamp():
+                            consensus(reform, expedite_approval_process=True)
+                    if reform.reform_date + expiration < unix_timestamp():
+                        deny_change(reform)
+                        stop_poll(reform)
+            time.sleep(3600)
+    except Exception as e:
+        logger(e, "ERROR")
+
+if __name__ == '__main__':
+    threading.Thread(target=poll_expiration_manager).start()
 
 ########################################################################################################################
 ### MAIN - COMMAND HANDLERS
@@ -2805,29 +2870,26 @@ if __name__ == '__main__':
         # FORCE
         @bot.message_handler(commands=[force_cmd])
         def force_command(message):
-            try:
-                command = message.text.split()
-                if member_is_dev(message):
-                    if len(command) >= 2:
-                        if command[1] == setting_cmd:
-                            command.pop(0)
-                            message.text = ' '.join(command)
-                            setting_command(message, force=True)
-                        elif command[1] == mod_cmd:
-                            command.pop(0)
-                            message.text = ' '.join(command)
-                            mod_command(message, force=True)
-                        elif len(command) == 2 and command[1] == restart_cmd:
-                            message.text = restart_confirm_cmd
-                            confirm_restart_command(message, force=True)
-                        else:
-                            reply_to(message, msg_force_cmd_incorrect_syntax)
+            command = message.text.split()
+            if member_is_dev(message):
+                if len(command) >= 2:
+                    if command[1] == setting_cmd:
+                        command.pop(0)
+                        message.text = ' '.join(command)
+                        setting_command(message, force=True)
+                    elif command[1] == mod_cmd:
+                        command.pop(0)
+                        message.text = ' '.join(command)
+                        mod_command(message, force=True)
+                    elif len(command) == 2 and command[1] == restart_cmd:
+                        message.text = restart_confirm_cmd
+                        confirm_restart_command(message, force=True)
                     else:
                         reply_to(message, msg_force_cmd_incorrect_syntax)
                 else:
-                    reply_to(message, msg_only_master)
-            except Exception as e:
-                logger(e, "ERROR")
+                    reply_to(message, msg_force_cmd_incorrect_syntax)
+            else:
+                reply_to(message, msg_only_master)
 
         ########################################
         ### TELEBOT - START POLLING
