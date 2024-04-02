@@ -81,7 +81,6 @@ if __name__ == '__main__':
     GAME_SERVER_DB=os.path.join(GAME_FOLDER, 'db/'+SERVICE_NAME+'.db')
 
     #BACKUPS
-
     BACKUP_FOLDER = os.path.join(SERVICE_FOLDER, 'backups')
 
     # THIS WILL SLOW DOWN BOOT PROCESS A BIT
