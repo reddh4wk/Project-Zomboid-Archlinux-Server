@@ -68,15 +68,21 @@ if __name__ == '__main__':
     FILENAME = os.path.basename(os.path.realpath(__file__))
     BASENAME = os.path.splitext(FILENAME)[0]
     THIS_FOLDER = os.path.dirname(os.path.realpath(__file__))
-    THIS_LOG_FILE = os.path.join(THIS_FOLDER, BASENAME+'.log')
+    THIS_LOG_FILE = os.path.join(THIS_FOLDER, "_"+BASENAME+'.log')
     SERVICE_FOLDER = os.path.abspath(os.path.join(THIS_FOLDER, os.pardir))
     SERVICE_NAME = os.path.basename(SERVICE_FOLDER) # Please put the server in a folder with a name different form "vanilla" or "default"
     SERVICE_LOG = os.path.join(SERVICE_FOLDER, SERVICE_NAME+'.log')
     HOME_FOLDER = os.path.expanduser("~")
-    ZOMBOID_FOLDER=os.path.join(HOME_FOLDER, 'Zomboid')
-    ZOMBOID_SETTINGS_FOLDER=os.path.join(ZOMBOID_FOLDER, 'Server')
-    ZOMBOID_PLAYER_DB=os.path.join(ZOMBOID_FOLDER, 'Saves/Multiplayer/'+SERVICE_NAME+'/players.db')
-    ZOMBOID_SERVER_DB=os.path.join(ZOMBOID_FOLDER, 'db/'+SERVICE_NAME+'.db')
+    GAME_FOLDER=os.path.join(HOME_FOLDER, 'Zomboid')
+    GAME_SETTINGS_FOLDER=os.path.join(GAME_FOLDER, 'Server')
+    GAME_FILES_FOLDER = os.path.join(HOME_FOLDER, 'Zomboid/Saves/Multiplayer/'+SERVICE_NAME)
+    GAME_VEHICLES_DB = os.path.join(GAME_FILES_FOLDER, 'vehicles.db')
+    GAME_PLAYER_DB=os.path.join(GAME_FILES_FOLDER+'/players.db')
+    GAME_SERVER_DB=os.path.join(GAME_FOLDER, 'db/'+SERVICE_NAME+'.db')
+
+    #BACKUPS
+
+    BACKUP_FOLDER = os.path.join(SERVICE_FOLDER, 'backups')
 
     # THIS WILL SLOW DOWN BOOT PROCESS A BIT
     AUTOUPDATE_VANILLA_SETTINGS_ON_START = 2 # 1=Always, 0=Never, 2=Only On Mod Changes
@@ -84,14 +90,14 @@ if __name__ == '__main__':
     VANILLA_LOG_FILE = os.path.join(SERVICE_FOLDER, VANILLA_SERVER_NAME+".log")
 
     # CURRENT SETTINGS
-    SERVERINI_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, SERVICE_NAME+".ini")
-    SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, SERVICE_NAME+"_SandboxVars.lua")
+    SERVERINI_PATH = os.path.join(GAME_SETTINGS_FOLDER, SERVICE_NAME+".ini")
+    SANDBOXVARS_PATH = os.path.join(GAME_SETTINGS_FOLDER, SERVICE_NAME+"_SandboxVars.lua")
     # VANILLA SETTINGS
-    VANILLA_SERVERINI_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, VANILLA_SERVER_NAME+".ini")
-    VANILLA_SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, VANILLA_SERVER_NAME+"_SandboxVars.lua")
+    VANILLA_SERVERINI_PATH = os.path.join(GAME_SETTINGS_FOLDER, VANILLA_SERVER_NAME+".ini")
+    VANILLA_SANDBOXVARS_PATH = os.path.join(GAME_SETTINGS_FOLDER, VANILLA_SERVER_NAME+"_SandboxVars.lua")
     # USER_DEFINED STANDARD SETTINGS
-    DEFAULT_SERVERINI_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "default.ini")
-    DEFAULT_SANDBOXVARS_PATH = os.path.join(ZOMBOID_SETTINGS_FOLDER, "default_SandboxVars.lua")
+    DEFAULT_SERVERINI_PATH = os.path.join(GAME_SETTINGS_FOLDER, "default.ini")
+    DEFAULT_SANDBOXVARS_PATH = os.path.join(GAME_SETTINGS_FOLDER, "default_SandboxVars.lua")
     
     # TELEGRAM STUFF
     SERVER_CHATS=[] #Production
@@ -118,7 +124,7 @@ def log_timestamp():
     from datetime import datetime
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-def logger(message, msg_type, log_file=THIS_LOG_FILE, need_traceback=True):
+def logger(message, msg_type, log_file=THIS_LOG_FILE, nt=True): # nt stands for "need traceback"
     import os
     import traceback
     import sys
@@ -131,7 +137,7 @@ def logger(message, msg_type, log_file=THIS_LOG_FILE, need_traceback=True):
                 print(msg_body)
                 f.write(msg_body+"\n")
         traceback_str = traceback.format_exc()
-        if msg_type in ['ERROR','SQL_ERROR'] and need_traceback:
+        if msg_type in ['ERROR','SQL_ERROR'] and nt:
             if traceback_str:
                 msg_body = f"[{timestamp}][TRACEBACK] {traceback_str}"
                 if DEBUG_MODE:
@@ -172,6 +178,13 @@ def unix_timestamp():
     try:
         import time
         return int(time.time())
+    except Exception as e:
+        logger(e, "ERROR")
+
+def backup_timestamp():
+    try:
+        from datetime import datetime
+        return datetime.now().strftime('%Y-%m-%d_%H.%M.%S')
     except Exception as e:
         logger(e, "ERROR")
 
@@ -352,6 +365,7 @@ def is_already_running(current_pid, current_script):
                 if current_script in line and 'python' in line:
                     pid = int(line.split()[1])
                     if pid != current_pid:
+                        logger(f"Processes found already running:\n{processes.strip()}", "DEBUG")
                         return True, pid
         return False, None
     except Exception as e:
@@ -378,32 +392,32 @@ if __name__ == '__main__':
         shutdown_flag = '--shutdown' in sys.argv
         already_running, running_pid = is_already_running(pid, name)
         if restart_flag and stop_flag:
-            logger("Flags --restart and --stop cannot be called at the same time", "ERROR", need_traceback=False)
+            logger("Flags --restart and --stop cannot be called at the same time", "ERROR", nt=False)
             sys.exit(1)
         if already_running:
             if restart_flag:
                 if running_pid:
                     stop_previous_instance(running_pid, 'violent')
                 else:
-                    logger("Couldn't determine the PID of the previous instance.", "ERROR", need_traceback=False)
+                    logger("Couldn't determine the PID of the previous instance.", "ERROR", nt=False)
                     sys.exit(1)
             elif stop_flag:
                 if running_pid:
                     stop_previous_instance(running_pid, 'violent')
                     sys.exit(0)
                 else:
-                    logger("Couldn't determine the PID of the previous instance.", "ERROR", need_traceback=False)
+                    logger("Couldn't determine the PID of the previous instance.", "ERROR", nt=False)
                     sys.exit(1)
             elif shutdown_flag:
                 if running_pid:
                     stop_previous_instance(running_pid, 'graceful')
                     sys.exit(0)
             else:
-                logger("Another penis of the script is already running.", "ERROR", need_traceback=False)
+                logger("Another instance of the script is already running.", "ERROR", nt=False)
                 sys.exit(1)
         else:
             if stop_flag:
-                logger("The server isn't running already. Since the --stop flag has been used, exiting.", "ERROR", need_traceback=False)
+                logger("The server isn't running already. Since the --stop flag has been used, exiting.", "ERROR", nt=False)
                 sys.exit(1)
     except Exception as e:
         logger(e, "ERROR")
@@ -440,8 +454,19 @@ def server_chat_message(text, disable_notification=True, disable_web_page_previe
     except Exception as e:
         logger(e, "ERROR")
 
-def reply_to(message, text, disable_notification=True, disable_web_page_preview=False, parse_mode='Markdown'):
+def reply_to(message, text, disable_notification=True, disable_web_page_preview=False, parse_mode='MarkdownV2'):
     try:
+        if parse_mode == 'MarkdownV2':
+            special_characters = ['_','*','[',']','(',')','~','`','>','#','+','-','=','|','{','}','.','!']
+            escaped_text = ''
+            for char in text:
+                if char in special_characters:
+                    escaped_text += '\\' + char
+                else:
+                    escaped_text += char
+            text = escaped_text
+        logger(f"In reply to message:\n{message.text}", "DEBUG")
+        logger(f"Reply:\n{text}", "DEBUG")
         bot.reply_to(message, text, disable_notification=disable_notification, disable_web_page_preview=disable_web_page_preview, parse_mode=parse_mode)
     except Exception as e:
         logger(e, "ERROR")
@@ -496,7 +521,7 @@ if __name__ == '__main__':
     import os
     pztgdb = os.path.join(THIS_FOLDER, 'pztg.db')
     if DEBUG_MODE:
-        debug_db = os.path.join(THIS_FOLDER, 'pztg_debug.db')
+        debug_db = os.path.join(THIS_FOLDER, '_pztg_debug.db')
         run_command(f"cp {pztgdb} {debug_db}")
         pztgdb = debug_db
         logger(f"Debug database is being used: {debug_db}", "DEBUG")
@@ -748,7 +773,7 @@ def sync_with_server_whitelist():
         from datetime import datetime
         TEMP_DB = os.path.join(THIS_FOLDER, "tmp.db")
         # Need to copy to another file to open it since it's already open by the game. Also safer to touch just the copy.
-        run_command(f'cp {ZOMBOID_SERVER_DB} {TEMP_DB}')
+        run_command(f'cp {GAME_SERVER_DB} {TEMP_DB}')
         # Let's open the bot DB
         conn = sqlite3.connect(pztgdb)
         c = conn.cursor()
@@ -932,8 +957,8 @@ def confirm_mfa_registration(steam_id, username, telegram_id):
         c.execute(f'''UPDATE players SET telegram_id = {telegram_id} WHERE steam_id = {steam_id}''')
         conn.commit()
         pending_query_type = 'mfa'
-        add_to_pending_queries(pending_query_type, ZOMBOID_SERVER_DB, '''DELETE FROM whitelist WHERE steam_id = ? AND username = ?''', (steam_id, username))
-        add_to_pending_queries(pending_query_type, ZOMBOID_PLAYER_DB, '''DELETE FROM networkPlayers WHERE steam_id = ? AND username = ?''', (steam_id, username))
+        add_to_pending_queries(pending_query_type, GAME_SERVER_DB, '''DELETE FROM whitelist WHERE steam_id = ? AND username = ?''', (steam_id, username))
+        add_to_pending_queries(pending_query_type, GAME_PLAYER_DB, '''DELETE FROM networkPlayers WHERE steam_id = ? AND username = ?''', (steam_id, username))
         add_to_pending_queries(pending_query_type, pztgdb, '''DELETE FROM players WHERE steam_id = ? AND username = ?''', (steam_id, username))
         add_to_pending_queries(pending_query_type, pztgdb, '''UPDATE mfa SET pending_removal = 0 WHERE steam_id = ? AND telegram_id = ?''', (steam_id, telegram_id))
     except sqlite3.Error as e:
@@ -1320,7 +1345,7 @@ def save_setting_to_file(variable_name, value, table_name='main'):
                         line.insert(1, "= "+value)
                         new_line = ''.join(line)
                     else:
-                        logger(f"Not determinable file type for: {current_setting['basename']}", "ERROR", need_traceback=False)
+                        logger(f"Not determinable file type for: {current_setting['basename']}", "ERROR", nt=False)
                 logger(f"In {file_path}: \"{new_line.strip()}\"", "CHANGE")
                 all_lines[line_number] = new_line
                 with open(file_path, 'w') as file:
@@ -1422,7 +1447,7 @@ def reload_settings(serverini=SERVERINI, sandboxvars=SANDBOXVARS, table_name='ma
             conn.commit()
             conn.close()
             return True
-        logger(f"\'{serverini[0]}\' or \'{sandboxvars[0]}\' wasn't found.", "ERROR", need_traceback=False)
+        logger(f"\'{serverini[0]}\' or \'{sandboxvars[0]}\' wasn't found.", "ERROR", nt=False)
         return False
     except sqlite3.Error as e:
         logger(e, "SQL_ERROR")
@@ -1547,7 +1572,7 @@ def is_modid(mod_id):
 
 def is_workshopid(workshop_id):
     try:
-        return all(char.isdigit() for char in workshop_id) and len(workshop_id) == 10
+        return all(char.isdigit() for char in workshop_id) and len(workshop_id) in [9,10] # Yes, I found some with 9 digits
     except Exception as e:
         logger(e, "ERROR")
 
@@ -1643,7 +1668,7 @@ def strip_IDs_from_steam(url):
                 return sort_valid_modid_workshopid(mod_id, url.split('=')[1])
             return False
         else:
-            logger(f"Failed to fetch page. Status code: {str(response.status_code)}", "ERROR", need_traceback=False)
+            logger(f"Failed to fetch page. Status code: {str(response.status_code)}", "ERROR", nt=False)
             return None
     except Exception as e:
         logger(e, "ERROR")
@@ -1744,7 +1769,8 @@ def init_commands():
             [register_cmd,register_desc],
             [log_cmd,log_desc],
             [help_cmd,help_desc],
-            [force_cmd,force_desc]
+            [force_cmd,force_desc],
+            [backup_cmd,backup_desc]
         ])
     except Exception as e:
         logger(e, "ERROR")
@@ -1768,6 +1794,17 @@ if __name__ == '__main__':
     restart_cancel_cmd='cancel_restart'
     restart_desc='Restarts the application'
     restart_msg="Are you really sure you want to restart the server? All users will be disconnected.\n\nPlease press: /"+restart_confirm_cmd+" to proceed.\n\nOr press: /"+restart_cancel_cmd+" to cancel."
+    backup_cmd='backup'
+    backup_desc='Allows to backup portions of the map, settings, players, vehicles and restore them'
+    backup_msg_helper='''To use '''+backup_cmd+''' command please use:
+        /'''+backup_cmd+''' save|restore <backup_name> <options>
+
+Examples:
+        /'''+backup_cmd+''' save <backup_name> --map <x1> <y1> <x2> <y2> --vehicles --players --settings --items
+        /'''+backup_cmd+''' restore <backup_name> --map --vehicles --players --settings --items
+
+For the coordinates, you can use this map:
+https://map.projectzomboid.com/'''
     log_cmd = 'log'
     log_desc = 'Filters the log of this bot'
     log_msg_helper ='''To filter the logs, please use:
@@ -1778,7 +1815,7 @@ if __name__ == '__main__':
         /'''+stats_cmd+''' <steam id>  [for another player]'''
     mod_cmd='mod'
     mod_desc='Manages installed mods through polls'
-    mod_msg_helper='''To use '''+mod_cmd+''' command please use:
+    mod_msg_helper='''There are a few ways to use '''+mod_cmd+''' command. Please use one of the following forms:
         /'''+mod_cmd+''' list
         /'''+mod_cmd+''' install <Mod URL>
         /'''+mod_cmd+''' install <Mod ID> <Workshop ID>
@@ -1828,6 +1865,7 @@ https://help.steampowered.com/en/faqs/view/2816-BE67-5B69-0FEC'''
 '''+setting_msg_helper+'''
 '''+stats_msg_helper+'''
 '''+rename_msg_helper+'''
+'''+backup_msg_helper+'''
 '''+register_msg_helper
 
     ### OTHER MESSAGES
@@ -2016,7 +2054,7 @@ class GameServerManager:
             elif mod_fail_flag and keyword == log_key_mod_fail:
                 match = re.search(mod_fail_re_pattern, line)
                 msg = f"Mod \"{match.group(1)}\" failed to load while starting the server"
-                logger(msg, "ERROR", need_traceback=False)
+                logger(msg, "ERROR", nt=False)
                 server_chat_message(msg)
             elif command_flag and keyword == log_key_cmd:
                 if '"quit"' not in line and '"save"' not in line:
@@ -2086,11 +2124,11 @@ class GameServerManager:
             if r[0]:
                 self.server_start_executed.set()
                 timeout = 10
-                if self.execute_for_every_until_true(timeout,1,self.tmux_session_state,self.server_name,True):
+                if self.execute_for_every_until_true(timeout,1,self.tmux_session_state,True):
                     self.server_starting.set()
                     return True
                 else:
-                    logger(f"Tmux session \"{self.server_name}\" did not come up since {str(timeout)} seconds from the execution.", "ERROR", need_traceback=False)
+                    logger(f"Tmux session \"{self.server_name}\" did not come up since {str(timeout)} seconds from the execution.", "ERROR", nt=False)
                     return False
         except Exception as e:
             logger(e, "ERROR")
@@ -2105,16 +2143,16 @@ class GameServerManager:
                 if quit_cmd[0]:
                     self.server_stop_executed.set()
                     timeout = 60
-                    if self.execute_for_every_until_true(timeout,2,self.tmux_session_state,self.server_name,False):
+                    if self.execute_for_every_until_true(timeout,2,self.tmux_session_state,False):
                         self.server_stopped.set()
                     return True
                 return True
         except Exception as e:
             logger(e, "ERROR")
  
-    def tmux_session_state(self, session_name, state):
+    def tmux_session_state(self, state=True):
         try:
-            r = run_command(f"tmux list-sessions | grep {session_name}")
+            r = run_command(f"tmux list-sessions | grep {self.server_name}")
             if r[0]:
                 logger(f"Lookup results for tmux session "+r[1].strip(), "DEBUG")
             if state:
@@ -2135,7 +2173,7 @@ class GameServerManager:
         try:
             def init_start():
                 if not self.start_cmd():
-                    logger(f"Failed to start the server \"{self.server_name}\".", "ERROR", need_traceback=False)
+                    logger(f"Failed to start the server \"{self.server_name}\".", "ERROR", nt=False)
                     return
             threading.Thread(target=init_start).start()
             self.server_start_executed.wait()
@@ -2183,13 +2221,12 @@ if __name__ == '__main__':
                     if game_manager.stop():
                         os.kill(os.getpid(), signal.SIGKILL)
                     else:
-                        logger("Server .stop() function failed at shutting down the server.", "ERROR", need_traceback=True)
+                        logger("Server .stop() function failed at shutting down the server.", "ERROR", nt=True)
             signal.signal(signal.SIGTERM, shutdown_signal_handler)
             noserver_flag = '--noserver' in sys.argv
             if not noserver_flag:
-                if game_manager.tmux_session_state(SERVICE_NAME, True):
+                if game_manager.tmux_session_state():
                     logger(f"The game server session \"{SERVICE_NAME}\" is already live. Aborting launch.", "INFO")
-                    
                     threading.Thread(target=game_manager.monitor_log).start()
                     logger(f"Log monitor started to parse \"{SERVICE_LOG}\"", "DEBUG")
                 else:
@@ -2331,7 +2368,7 @@ if __name__ == '__main__':
                 VANILLA_SETTINGS = 404
         else:
             VANILLA_SETTINGS = 500
-            logger("Unsupported value for AUTOUPDATE_VANILLA_SETTINGS_ON_START. Please use 0, 1, or 2.", "ERROR", need_traceback=False)
+            logger("Unsupported value for AUTOUPDATE_VANILLA_SETTINGS_ON_START. Please use 0, 1, or 2.", "ERROR", nt=False)
     except Exception as e:
         VANILLA_SETTINGS = 500
         logger(e, "ERROR")
@@ -2585,6 +2622,443 @@ def poll_expiration_manager():
 if __name__ == '__main__':
     threading.Thread(target=poll_expiration_manager).start()
 
+
+########################################################################################################################
+### BACKUPS MANAGERS
+########################################################################################################################
+
+def map_files(min_x, min_y, max_x, max_y):
+    try:
+        last = False
+        filenames = []
+        for i in range(int(str(min_x[:-1])), int(str(max_x[:-1])) + 1):
+            for j in range(int(str(min_y[:-1])), int(str(max_y[:-1])) + 1):
+                chunk_name = f"map_{str(i)[:-1]}_{str(j)[:-1]}.bin"
+                if last:
+                    if last != chunk_name:
+                        filenames.append(os.path.join(GAME_FILES_FOLDER, chunk_name))
+                else:
+                    filenames.append(os.path.join(GAME_FILES_FOLDER, chunk_name))
+                last = chunk_name
+        logger(f"Filenames requested for backup:\n{filenames}", "DEBUG")
+        return filenames
+    except Exception as e:
+        logger(e, "ERROR")
+
+def get_backup_list():
+    try:
+        backup_list = []
+        for backup in os.listdir(BACKUP_FOLDER):
+            backup_list.append(backup.split('_'))
+        return backup_list
+    except Exception as e:
+        logger(e, "ERROR")
+
+def get_most_recent_backup(backup_path):
+    try:
+        from datetime import datetime
+        def last(date1, date2):
+            date1 = datetime.strptime(date1, "%Y-%m-%d_%H.%M.%S")
+            date2 = datetime.strptime(date2, "%Y-%m-%d_%H.%M.%S")
+            return date1.strftime("%Y-%m-%d_%H.%M.%S") if date1 > date2 else date2.strftime("%Y-%m-%d_%H.%M.%S")
+        backup_list = get_backup_list()
+        most_recent = None
+        for folder in backup_list:
+            if len(folder) == 3:
+                for bname, bdate, btime in backup_list:
+                    if bname == backup_name:
+                        if most_recent:
+                            most_recent = last(bdate+'_'+btime, most_recent)
+                        else:
+                            most_recent = bdate+'_'+btime
+            else:
+                logger(f"Invalid backup folder name: {folder}", "DEBUG")
+        return os.path.join(BACKUP_FOLDER, f"{backup_name}_{most_recent}")
+    except Exception as e:
+        logger(e, "ERROR")
+
+def create_backup_folder(backup_name):
+    try:
+        backup_path = os.path.join(BACKUP_FOLDER, backup_name+'_'+backup_timestamp())
+        r = run_command(f"mkdir -p {backup_path}")
+        if r[0]:
+            return backup_path
+        else:
+            logger(f"Error during creation of the backup folder ({backup_path}).", "DEBUG")
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
+
+def backup_exists(backup_path):
+    try:
+        backup_list = get_backup_list()
+        for btype, bname, bdate, btime in backup_list:
+            if bname == backup_name:
+                world = players = vehicles = items = settings = False
+                for folder in os.listdir(os.path.join(BACKUP_FOLDER, f"{bname}_{bdate}_{btime}")):
+                    if folder == 'map':
+                        world = True
+                    elif folder == 'players':
+                        players = True
+                    elif folder == 'vehicles':
+                        vehicles = True
+                    elif folder == 'items':
+                        items = True
+                    elif folder == 'settings':
+                        settings = True
+                return [world, players, vehicles, items, settings]
+            else:
+                return False
+    except Exception as e:
+        logger(e, "ERROR")
+
+def db_filter_backupped_vehicles(vehicles_db, min_x, min_y, max_x, max_y):
+    try:
+        import sqlite3
+        conn = sqlite3.connect(vehicles_db)
+        cursor = conn.cursor()
+        # Delete vehicles outside the area
+        cursor.execute(f'''DELETE FROM vehicles WHERE x < {min_x} OR x > {max_x} OR y < {min_y} OR y > {max_y};''')
+        cursor.execute(f'''SELECT wx, wy FROM vehicles WHERE x > {min_x} AND x < {max_x} AND y > {min_y} AND y < {max_y};''')
+        for wx, wy in cursor.fetchall():
+            print(f"Found vehicle to save in {wx}, {wy}")
+        # Reorder the id column
+        cursor.execute(f'''UPDATE vehicles SET id = (SELECT COUNT(*) FROM vehicles AS v WHERE v.id < vehicles.id) + 1;''')
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
+    except Exception as e:
+        logger(e, "ERROR")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def backup_save_map(backup_path, world):
+    try:
+        x1, y1, x2, y2 = world
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        if not all(0 <= coord <= 20000 for coord in [x1, y1, x2, y2]):
+            logger(f"Vanilla map coordinates are not between 0 and 20000: {str(x1)} {str(y1)} {str(x2)} {str(y2)}", "WARNING")
+        else:
+            min_x = min(x1, x2)
+            max_x = max(x1, x2)
+            min_y = min(y1, y2)
+            max_y = max(y1, y2)
+            file_paths = map_files(min_x, min_y, max_x, max_y)
+            not_found = [path for path in file_paths if not os.path.exists(path)]
+            if not not_found:
+                logger(f"All files exist. Proceeding...", "DEBUG")
+                r = run_command(f"mkdir -p {backup_path}")
+                if r[0]:
+                    error = False
+                    for path in file_paths:
+                        r = run_command(f"cp {path} {backup_path}")
+                        if not r[0]:
+                            error = True
+                            logger(f"Error during the copy of {path} to {backup_path}", "DEBUG")
+                    if not error:
+                        logger(f"Map backup completed successfully.", "DEBUG")
+                        return True
+                    else:
+                        return False
+            else:
+                logger(f"Files not found: {not_found}", "DEBUG")
+                return False
+    except Exception as e:
+        logger(e, "ERROR")
+
+def backup_save_items(backup_path):
+    try:
+        if os.path.exists(os.path.join(GAME_FILES_FOLDER, 'WorldDictionary.bin')):
+            r = run_command(f"mkdir -p {backup_path}")
+            if r[0]:
+                r = run_command(f"cp {os.path.join(GAME_FILES_FOLDER, 'WorldDictionary.bin')} {backup_path}")
+                if not r[0]:
+                    logger(f"Error during the copy of WorldDictionary.bin to {backup_path}", "DEBUG")
+                else:
+                    logger(f"WorldDictionary backup completed successfully.", "DEBUG")
+                    return True
+            else:
+                logger(f"Error during the creation of the backup folder.", "DEBUG")
+        else:
+            logger(f"WorldDictionary.bin does not exist in the game folder.", "DEBUG")
+    except Exception as e:
+        logger(e, "ERROR")
+
+def backup_save_vehicles(backup_path, selective=False, area=None):
+    try:
+        if os.path.exists(os.path.join(GAME_FILES_FOLDER, 'vehicles.db')):
+            r = run_command(f"mkdir -p {backup_path}")
+            if r[0]:
+                r = run_command(f"cp {os.path.join(GAME_FILES_FOLDER, 'vehicles.db')} {backup_path}")
+                if not r[0]:
+                    logger(f"Error during the copy of vehicles.db to {backup_path}", "DEBUG")
+                else:
+                    logger(f"Vehicles backup completed successfully.", "DEBUG")
+                    if selective:
+                        min_x, min_y, max_x, max_y = area
+                        min_x, min_y, max_x, max_y = int(min_x), int(min_y), int(max_x), int(max_y)
+                        if db_filter_backupped_vehicles(os.path.join(backup_path, 'vehicles.db'), min_x, min_y, max_x, max_y):
+                            logger(f"Vehicles outside area has been filtered out.", "DEBUG")
+                            return True
+                        else:
+                            return False
+                    return True
+            else:
+                logger(f"Error during the creation of the backup folder.", "DEBUG")
+        else:
+            logger(f"vehicles.db does not exist in the game folder.", "DEBUG")
+    except Exception as e:
+        logger(e, "ERROR")
+
+def backup_save_players(backup_path):
+    try:
+        if os.path.exists(os.path.join(GAME_PLAYER_DB)):
+            players_db = True
+        if os.path.exists(os.path.join(GAME_SERVER_DB)):
+            whitelist = True
+        if players_db or whitelist:
+            r = run_command(f"mkdir -p {backup_path}")
+            if r[0]:
+                error = False
+                if players_db:
+                    r1 = run_command(f"cp {GAME_PLAYER_DB} {backup_path}")
+                    if not r1[0]:
+                        error = True
+                        logger(f"Error during the copy of {GAME_PLAYER_DB} to {backup_path}", "DEBUG")
+                if whitelist:
+                    r2 = run_command(f"cp {GAME_SERVER_DB} {backup_path}")
+                    if not r2[0]:
+                        error = True  
+                        logger(f"Error during the copy of the whitelist from {GAME_SERVER_DB} to {backup_path}", "DEBUG")
+                if not error:
+                    logger(f"Players backup completed successfully.", "DEBUG")
+                    return True
+            else:
+                logger(f"Error during the creation of the backup folder.", "DEBUG")
+        else:
+            logger(f"Aborting backup. players.db and whitelist.dat do not exist in the game folder.", "DEBUG")
+    except Exception as e:
+        logger(e, "ERROR")
+
+def backup_save_setting(backup_path):
+    try:
+        error = False
+        r = run_command(f"mkdir -p {backup_path}")
+        if not r[0]:
+            logger(f"Error during creation of the backup folder ({backup_path}). Aborting backup...", "DEBUG")
+            error = True
+        else:
+            r = run_command(f"cp {SERVERINI_PATH} {backup_path}")
+            if not r[0]:
+                error = True
+                logger(f"Error during the copy of {SERVERINI_PATH} to {backup_path}", "DEBUG")
+            r = run_command(f"cp {SANDBOXVARS_PATH} {backup_path}")
+            if not r[0]:
+                error = True
+                logger(f"Error during the copy of {SANDBOXVARS_PATH} to {backup_path}", "DEBUG")
+        if not error:
+            logger(f"Settings backup {backup_path} completed successfully.", "DEBUG")
+            return True
+    except Exception as e:
+        logger(e, "ERROR")
+
+def backup_save(message, backup_name, world, players, items, vehicles, settings):
+    try:
+        failed = []
+        backup_path = create_backup_folder(backup_name)
+        if backup_path:
+            if world:
+                if not backup_save_map(os.path.join(backup_path, 'world'), world):
+                    failed.append("world")
+            if players:
+                if not backup_save_players(os.path.join(backup_path, 'players')):
+                    failed.append("players")
+            if items:
+                if not backup_save_items(os.path.join(backup_path, 'items')):
+                    failed.append("items")
+            if vehicles:
+                if world:
+                    if not backup_save_vehicles(os.path.join(backup_path, 'vehicles'), selective=True, area=world):
+                        failed.append("vehicles")
+                elif backup_save_vehicles(os.path.join(backup_path, 'vehicles')):
+                    failed.append("vehicles")
+            if settings:
+                if not backup_save_setting(os.path.join(backup_path, 'settings')):
+                    failed.append("settings")
+            if failed:
+                logger(f"Backup failed for: {', '.join(failed)}", "ERROR", nt=False)
+                reply_to(message, f"Backup failed for: {', '.join(failed)}")
+            else:
+                logger(f"Backup {backup_name} completed successfully.", "INFO")
+                reply_to(message, f"Backup {backup_name} completed successfully.")
+        else:
+            reply_to(message, f"Backup failed. Error during the creation of the backup folder.")
+    except Exception as e:
+        logger(e, "ERROR")
+
+def db_restore_vehicles_in_area(vehicles_db):
+    try:
+        import sqlite3
+        conn = sqlite3.connect(GAME_VEHICLES_DB)
+        c = conn.cursor()
+        # Take the world version from the zomboid db from any row
+        c.execute('''SELECT worldversion FROM vehicles LIMIT 1;''')
+        worldversion = c.fetchone()
+        if worldversion:
+            worldversion = worldversion[0]
+        else:
+            logger("Worldversion not found in the Zomboid vehicles.db. Please make sure you have seen at least one vehicle in the new map and saved.", "DEBUG")
+            conn.close()
+            return False
+        c.execute('''ATTACH DATABASE ? AS backup''', (vehicles_db,))
+        # Merge data from backup into the main database
+        conn.execute('''
+            INSERT INTO vehicles (wx, wy, x, y, worldversion, data)
+            SELECT wx, wy, x, y, ?, data
+            FROM backup.vehicles;
+        ''', (worldversion,))
+        c.execute('''SELECT wx, wy FROM backup.vehicles''')
+        vehicles = c.fetchall()
+        for wx, wy in vehicles:
+            logger(f"Vehicle in {wx}, {wy} inserted into {GAME_VEHICLES_DB}", "DEBUG")
+        conn.commit()
+        conn.close()
+        logger(f"Vehicles restored from {vehicles_db} to {GAME_VEHICLES_DB}", "INFO")
+        return True
+    except sqlite3.Error as e:
+        logger(e, "SQL_ERROR")
+        return False
+    except Exception as e:
+        logger(e, "ERROR")
+        return False
+
+def backup_restore_map(backup_path):
+    try:
+        if os.path.exists(backup_path):
+            r = run_command(f"cp {os.path.join(backup_path, 'map_*')} {GAME_FILES_FOLDER}")
+            if r[0]:
+                logger(f"Map restored from {backup_path}", "DEBUG")
+                return True
+            else:
+                logger(f"Error during the restore of the map from {backup_path}", "DEBUG")
+                return False
+        else:
+            logger(f"Backup folder {backup_path} does not exist.", "DEBUG")
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
+        return False
+
+def backup_restore_players(backup_path):
+    try:
+        if os.path.exists(backup_path):
+            r = run_command(f"cp {os.path.join(backup_path, 'players.db')} {GAME_PLAYER_DB}")
+            if not r[0]:
+                logger(f"Error during the restore of players.db from {backup_path}", "DEBUG")
+                error = True
+            else:
+                logger(f"players.db restored from {backup_path}", "DEBUG")
+            r = run_command(f"cp {os.path.join(backup_path, {SERVICE_NAME}+'.db')} {GAME_SERVER_DB}")
+            if not r[0]:
+                logger(f"Error during the restore of {SERVICE_NAME}.db from {backup_path}", "DEBUG")
+                error = True
+            else:
+                logger(f"{SERVICE_NAME}.db restored from {backup_path}", "DEBUG")
+            if not error:
+                return True
+        else:
+            logger(f"Backup folder {backup_path} does not exist.", "DEBUG")
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
+        return False
+
+def backup_restore_vehicles(backup_path):
+    try:
+        vehicles_db = os.path.join(backup_path, 'vehicles.db')
+        if os.path.exists(vehicles_db):
+            if db_restore_vehicles_in_area(vehicles_db):
+                logger(f"Vehicles restored from {vehicles_db}", "DEBUG")
+                return True
+            else:
+                logger(f"Error during the restore of vehicles.db from {vehicles_db}", "DEBUG")
+                return False
+    except Exception as e:
+        logger(e, "ERROR")
+        return False  
+
+def backup_restore_items(backup_path):
+    try:
+        if os.path.exists(backup_path):
+            r = run_command(f"cp {os.path.join(backup_path, 'WorldDictionary.db')} {GAME_FILES_FOLDER}")
+            if not r[0]:
+                logger(f"Error during the restore of items.db from {backup_path}", "DEBUG")
+            else:
+                logger(f"items.db restored from {backup_path}", "DEBUG")
+                return True
+        else:
+            logger(f"Backup folder {backup_path} does not exist.", "DEBUG")
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
+        return False
+
+def backup_restore_setting(backup_path):
+    try:
+        if os.path.exists(backup_path):
+            r = run_command(f"cp {os.path.join(backup_path, 'server.ini')} {SERVERINI_PATH}")
+            if not r[0]:
+                logger(f"Error during the restore of server.ini from {backup_path}", "DEBUG")
+            else:
+                logger(f"server.ini restored from {backup_path}", "DEBUG")
+            r = run_command(f"cp {os.path.join(backup_path, 'sandboxVars.lua')} {SANDBOXVARS_PATH}")
+            if not r[0]:
+                logger(f"Error during the restore of sandboxVars.lua from {backup_path}", "DEBUG")
+            else:
+                logger(f"sandboxVars.lua restored from {backup_path}", "DEBUG")
+            return True
+        else:
+            logger(f"Backup folder {backup_path} does not exist.", "DEBUG")
+            return False
+    except Exception as e:
+        logger(e, "ERROR")
+        return False
+
+def backup_restore(message, backup_name, world, players, items, vehicles, settings):
+    try:
+        failed = []
+        backup_path = get_most_recent_backup(backup_name)
+        if os.path.exists(backup_path):
+            if world:
+                if not backup_restore_map(os.path.join(backup_path, 'world')):
+                    failed.append("world")
+            if players:
+                if not backup_restore_players(os.path.join(backup_path, 'players')):
+                    failed.append("players")
+            if items:
+                if not backup_restore_items(os.path.join(backup_path, 'items')):
+                    failed.append("items")
+            if vehicles:
+                if not backup_restore_vehicles(os.path.join(backup_path, 'vehicles')):
+                    failed.append("vehicles")
+            if settings:
+                if not backup_restore_setting(os.path.join(backup_path, 'settings')):
+                    failed.append("settings")
+            if failed:
+                logger(f"Restore failed for: {', '.join(failed)}", "ERROR", nt=False)
+                reply(message, f"Restore failed for: {', '.join(failed)}")
+            else:
+                logger(f"Restore {backup_name} completed successfully.", "INFO")
+                reply(message, f"Restore {backup_name} completed successfully.")
+        else:
+            reply(message, f"Restore failed. Backup folder {backup_name} does not exist.")
+    except Exception as e:
+        logger(e, "ERROR")
+
 ########################################################################################################################
 ### MAIN - COMMAND HANDLERS
 ########################################################################################################################
@@ -2698,8 +3172,8 @@ if __name__ == '__main__':
                 def schedule_rename(new, old, steam_id):
                     pending_query_type = 'rename'
                     updated = delete_pending_rename(old, steam_id)
-                    add_to_pending_queries(pending_query_type, ZOMBOID_SERVER_DB, f"UPDATE whitelist SET username = '{new}' WHERE username = '{old}' AND steamid = {steam_id}", message.chat.id, message.id)
-                    add_to_pending_queries(pending_query_type, ZOMBOID_PLAYER_DB, f"UPDATE networkPlayers SET username = '{new}' WHERE username = '{old}'", message.chat.id, message.id)
+                    add_to_pending_queries(pending_query_type, GAME_SERVER_DB, f"UPDATE whitelist SET username = '{new}' WHERE username = '{old}' AND steamid = {steam_id}", message.chat.id, message.id)
+                    add_to_pending_queries(pending_query_type, GAME_PLAYER_DB, f"UPDATE networkPlayers SET username = '{new}' WHERE username = '{old}'", message.chat.id, message.id)
                     add_to_pending_queries(pending_query_type, pztgdb, f"UPDATE players SET username = '{new}' WHERE username = '{old}' AND steam_id = {steam_id}", message.chat.id, message.id)
                     msg = f"Character \"{old}\" will be renamed to \"{new}\" on next reboot unless a new player joins with this username before then."
                     if not updated:
@@ -2963,6 +3437,84 @@ if __name__ == '__main__':
                     reply_to(message, msg_force_cmd_incorrect_syntax)
             else:
                 reply_to(message, msg_only_master)
+        # BACKUP
+        @bot.message_handler(commands=[backup_cmd])
+        def backup_command(message):
+            def is_valid_backup_name(name):
+                return not any(char in set('/:?*|"<>\\\'') for char in name)
+            command = message.text.split()
+            options = ['map', 'players', 'vehicles', 'items', 'settings']
+            if member_is_dev(message):
+                if len(command) in range(3, 3+4+len(options)+1):
+                    action = command[1]
+                    if action == 'save':
+                        if is_valid_backup_name(command[2]):
+                            backup_name = command[2]
+                            # Verify options are in the command only once or zero
+                            if all(command.count(option) < 2 for option in options):
+                                # Veryfy only valid options are in the command
+                                for opt in command[3:]:
+                                    sentence1 = opt in options
+                                    sentence2 = 'map' in command and opt.isdigit() and command.index('map') < command.index(opt) < command.index('map')+5
+                                    print(opt, sentence1, sentence2, sentence1 or sentence2)
+                                if all(opt in options or ('map' in command and opt.isdigit() and command.index('map') < command.index(opt) < command.index('map')+5) for opt in command[3:]):
+                                    # Verify map coordinates are numbers
+                                    if 'map' in command:
+                                        if all(command[i].isdigit() for i in range(command.index('map') + 1, command.index('map') + 5)):
+                                            x1, y1, x2, y2 = map(int, command[command.index('map') + 1: command.index('map') + 5])
+                                            world_flag = True
+                                        else:
+                                            reply_to(message, "One of the coordinates you used is not a number")
+                                            return False
+                                    else:
+                                        world_flag = False
+                                    backup_save(message, backup_name, world=[x1, x2, y1, y2] if world_flag else False, players='players' in command, vehicles='vehicles' in command, items='items' in command, settings='settings' in command)
+                                else:
+                                    reply_to(message, "You used an invalid option in the command")
+                            else:
+                                reply_to(message, "You used one of the options more than once")
+                        else:
+                            reply_to(message, "You used a character not allowed in the backup name.")
+                    elif action == 'restore' and len(command) > 3:
+                        if game.manager.tmux_session_state():
+                            reply_to(message, "You can't restore a backup while the server is running.")
+                        backup_check = backup_exists(command[2])
+                        if backup_check:
+                            b_world, b_players, b_items, b_vehicles, b_settings = backup_check                            
+                            if all(opt in options for opt in command[3:]):
+                                if all(command.count(option) < 2 for option in options):
+                                    world = 'map' in command
+                                    players = 'players' in command
+                                    items = 'items' in command
+                                    vehicles = 'vehicles' in command
+                                    settings = 'settings' in command
+                                    conflict = []
+                                    if world and not b_world:
+                                        conflict.append('map')
+                                    if players and not b_players:
+                                        conflict.append('players')
+                                    if items and not b_items:
+                                        conflict.append('items')
+                                    if vehicles and not b_vehicles:
+                                        conflict.append('vehicles')
+                                    if settings and not b_settings:
+                                        conflict.append('settings')
+                                    if conflict:
+                                        reply_to(message, f"Aborting. The backup you are trying to restore doesn't have the following data: {', '.join(conflict)}.")
+                                    else:
+                                        backup_restore(message, backup_name, world='map' in command, players='players' in command, items='items' in command, vehicles='vehicles' in command)
+                                else:
+                                    reply_to(message, "You used the same option more than once.")
+                            else:
+                                reply_to(message, "You used an invalid option.")
+                        else:
+                            reply_to(message, "The backup you are trying to restore doesn't exist.")
+                    else:
+                        reply_to(message, backup_msg_helper)
+                else:
+                    reply_to(message, backup_msg_helper)
+            else:
+                reply_to(message, msg_only_master)          
 
         ########################################
         ### TELEBOT - START POLLING
