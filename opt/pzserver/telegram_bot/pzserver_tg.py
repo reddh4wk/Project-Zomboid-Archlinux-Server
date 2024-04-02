@@ -2630,9 +2630,10 @@ def map_files(min_x, min_y, max_x, max_y):
     try:
         last = False
         filenames = []
-        for i in range(int(str(min_x[:-1])), int(str(max_x[:-1])) + 1):
-            for j in range(int(str(min_y[:-1])), int(str(max_y[:-1])) + 1):
-                chunk_name = f"map_{str(i)[:-1]}_{str(j)[:-1]}.bin"
+        min_x, min_y, max_x, max_y = int(str(min_x)[:-1]), int(str(min_y)[:-1]), int(str(max_x+1)[:-1]), int(str(max_y+1)[:-1])
+        for i in range(min_x, max_x):
+            for j in range(min_y, max_y):
+                chunk_name = f"map_{str(i)}_{str(j)}.bin"
                 if last:
                     if last != chunk_name:
                         filenames.append(os.path.join(GAME_FILES_FOLDER, chunk_name))
@@ -2891,6 +2892,8 @@ def backup_save(message, backup_name, world, players, items, vehicles, settings)
             if failed:
                 logger(f"Backup failed for: {', '.join(failed)}", "ERROR", nt=False)
                 reply_to(message, f"Backup failed for: {', '.join(failed)}")
+                if 'world' in failed:
+                    reply_to(message, f"Please make sure these are the correct coordinates: ({world[0]}, {world[1]}), ({world[2]}, {world[3]})")
             else:
                 logger(f"Backup {backup_name} completed successfully.", "INFO")
                 reply_to(message, f"Backup {backup_name} completed successfully.")
@@ -3452,10 +3455,10 @@ if __name__ == '__main__':
                             # Verify options are in the command only once or zero
                             if all(command.count(option) < 2 for option in options):
                                 # Veryfy only valid options are in the command
-                                for opt in command[3:]:
-                                    sentence1 = opt in options
-                                    sentence2 = 'map' in command and opt.isdigit() and command.index('map') < command.index(opt) < command.index('map')+5
-                                    print(opt, sentence1, sentence2, sentence1 or sentence2)
+                                #for opt in command[3:]:
+                                    #sentence1 = opt in options
+                                    #sentence2 = 'map' in command and opt.isdigit() and command.index('map') < command.index(opt) < command.index('map')+5
+                                    #print(opt, sentence1, sentence2, sentence1 or sentence2)
                                 if all(opt in options or ('map' in command and opt.isdigit() and command.index('map') < command.index(opt) < command.index('map')+5) for opt in command[3:]):
                                     # Verify map coordinates are numbers
                                     if 'map' in command:
@@ -3467,7 +3470,7 @@ if __name__ == '__main__':
                                             return False
                                     else:
                                         world_flag = False
-                                    backup_save(message, backup_name, world=[x1, x2, y1, y2] if world_flag else False, players='players' in command, vehicles='vehicles' in command, items='items' in command, settings='settings' in command)
+                                    backup_save(message, backup_name, world=[x1, y1, x2, y2] if world_flag else False, players='players' in command, vehicles='vehicles' in command, items='items' in command, settings='settings' in command)
                                 else:
                                     reply_to(message, "You used an invalid option in the command")
                             else:
